@@ -45,6 +45,17 @@ final class RuntimeCoreTests: XCTestCase {
         XCTAssertEqual(original, decoded)
     }
 
+    /// Confirms an .stopped response round-trips correctly. This is the
+    /// acknowledgment reply for a .stop request, distinct from .jobStatus
+    /// because it confirms the stop signal was issued, not that the
+    /// process has actually finished exiting yet.
+    func testIPCResponseStoppedRoundTrips() throws {
+        let original = IPCResponse.stopped(jobID: "abc-123")
+        let data = try JSONEncoder().encode(original)
+        let decoded = try JSONDecoder().decode(IPCResponse.self, from: data)
+        XCTAssertEqual(original, decoded)
+    }
+
     /// Confirms an .jobStatus response round-trips correctly in both shapes
     /// it can take: exitCode present (job finished) and exitCode nil (job
     /// still running). Optional fields are a common source of Codable bugs,

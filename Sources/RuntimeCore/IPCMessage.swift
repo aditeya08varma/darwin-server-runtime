@@ -77,6 +77,15 @@ public enum IPCResponse: Codable, Sendable, Equatable {
     /// assigned it an ID the caller can use in later .stop/.status requests.
     case jobStarted(jobID: String)
 
+    /// Sent back for .stop, confirming the stop signal (SIGTERM, later
+    /// SIGKILL if needed) has been issued to the job. This does not mean
+    /// the process has actually exited yet, since that can take a few
+    /// seconds during the grace period ProcessSupervisor enforces in
+    /// Stage 3 - the daemon replies immediately rather than blocking the
+    /// connection until the process is fully dead. Poll .status afterward
+    /// to see it actually transition to .killed.
+    case stopped(jobID: String)
+
     /// Sent back for .status: the job's current lifecycle state, and its
     /// exit code once it has actually exited (nil while still running).
     case jobStatus(jobID: String, state: JobState, exitCode: Int32?)
