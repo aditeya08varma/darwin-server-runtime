@@ -1,12 +1,24 @@
 // Entry point for darwin-runtimed, the background daemon executable.
-// For now this just prints a startup message and exits. The real Unix
-// domain socket server and job supervision are built out across Stages 1
-// through 4; this file exists so the executable target has something to run
-// and the launchd plist (added later in Stage 1) has a real binary to point at.
+// Starts the Unix domain socket server and then keeps the process alive so
+// Network.framework's callback-driven listener has a chance to actually
+// run; job supervision (real .exec handling) is built out in Stage 3.
 import Foundation
 import RuntimeCore
 import Telemetry
+import os.log
 
-print("darwin-runtimed starting (stage 0 stub)")
-print("RuntimeCore version: \(RuntimeCore.version())")
-print("CSystemBridge linked correctly: \(Telemetry.bridgeIsLinked())")
+private let startupLogger = Logger(subsystem: "com.aditeya.darwin-runtime", category: "startup")
+
+startupLogger.info("darwin-runtimed starting")
+startupLogger.info("CSystemBridge linked correctly: \(Telemetry.bridgeIsLinked())")
+
+let daemonState = DaemonState()
+let server = try SocketServer(path: RuntimeSocket.path, state: daemonState)
+server.start()
+startupLogger.info("listening on \(RuntimeSocket.path, privacy: .public)")
+
+// Network.framework delivers connection and data events on a dispatch
+// queue in the background; without something keeping the main thread
+// alive, this executable would start the listener and then immediately
+// exit before it ever accepted a connection.
+dispatchMain()

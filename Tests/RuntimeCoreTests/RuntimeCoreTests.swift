@@ -45,6 +45,55 @@ final class RuntimeCoreTests: XCTestCase {
         XCTAssertEqual(original, decoded)
     }
 
+    /// Confirms IPCFraming.frame() produces bytes ending in exactly one
+    /// trailing newline, and that the JSON payload itself contains no
+    /// newline of its own. That second part matters: if compact JSON ever
+    /// contained a raw newline, LineFrameBuffer would incorrectly think
+    /// the message ended early.
+    func testFramingAppendsExactlyOneTrailingNewline() throws {
+        let framed = try IPCFraming.frame(IPCMessage.ping)
+        XCTAssertEqual(framed.last, 0x0A)
+        let withoutTrailingNewline = framed.dropLast()
+        XCTAssertFalse(withoutTrailingNewline.contains(0x0A))
+    }
+
+    /// Confirms LineFrameBuffer correctly reassembles a message that
+    /// arrives split across two separate chunks, which is exactly what
+    /// happens over a real socket when a large message doesn't arrive in
+    /// one piece. No frame should be returned until the newline shows up.
+    func testLineFrameBufferReassemblesSplitMessage() async throws {
+        let buffer = LineFrameBuffer()
+        let fullFrame = try IPCFraming.frame(IPCMessage.ping)
+        let splitPoint = fullFrame.count / 2
+        let firstHalf = fullFrame[fullFrame.startIndex..<fullFrame.index(fullFrame.startIndex, offsetBy: splitPoint)]
+        let secondHalf = fullFrame[fullFrame.index(fullFrame.startIndex, offsetBy: splitPoint)...]
+
+        let framesAfterFirstHalf = await buffer.append(Data(firstHalf))
+        XCTAssertTrue(framesAfterFirstHalf.isEmpty)
+
+        let framesAfterSecondHalf = await buffer.append(Data(secondHalf))
+        XCTAssertEqual(framesAfterSecondHalf.count, 1)
+
+        let decoded = try JSONDecoder().decode(IPCMessage.self, from: framesAfterSecondHalf[0])
+        XCTAssertEqual(decoded, IPCMessage.ping)
+    }
+
+    /// Confirms LineFrameBuffer correctly separates two complete messages
+    /// that arrive concatenated together in a single chunk, which can
+    /// happen when the sender writes several messages quickly and the
+    /// network layer coalesces them before delivery.
+    func testLineFrameBufferSplitsConcatenatedMessages() async throws {
+        let buffer = LineFrameBuffer()
+        let firstFrame = try IPCFraming.frame(IPCMessage.ping)
+        let secondFrame = try IPCFraming.frame(IPCResponse.pong)
+
+        let frames = await buffer.append(firstFrame + secondFrame)
+
+        XCTAssertEqual(frames.count, 2)
+        XCTAssertEqual(try JSONDecoder().decode(IPCMessage.self, from: frames[0]), IPCMessage.ping)
+        XCTAssertEqual(try JSONDecoder().decode(IPCResponse.self, from: frames[1]), IPCResponse.pong)
+    }
+
     /// Confirms an .stopped response round-trips correctly. This is the
     /// acknowledgment reply for a .stop request, distinct from .jobStatus
     /// because it confirms the stop signal was issued, not that the
