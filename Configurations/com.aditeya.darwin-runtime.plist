@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+    Dev-loop LaunchAgent for darwin-runtimed. A LaunchAgent (not a
+    LaunchDaemon) is used deliberately here: LaunchAgents run in the
+    logged-in user's session and load/unload without sudo, which keeps the
+    iterate-and-test cycle fast during development. A production
+    deployment would move this to a LaunchDaemon under
+    /Library/LaunchDaemons instead, running as a dedicated service account
+    - see the README for that tradeoff.
+
+    ProgramArguments below points at this machine's local debug build
+    path. That path is absolute and developer-specific by nature of how
+    LaunchAgents work; anyone else using this file would edit it to point
+    at their own checkout and build output first.
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.aditeya.darwin-runtime</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/Users/aditeyavarma/dev/darwin-server-runtime/.build/debug/darwin-runtimed</string>
+    </array>
+
+    <key>RunAtLoad</key>
+    <true/>
+
+    <key>KeepAlive</key>
+    <true/>
+
+    <key>StandardOutPath</key>
+    <string>/tmp/darwin-runtimed.stdout.log</string>
+
+    <key>StandardErrorPath</key>
+    <string>/tmp/darwin-runtimed.stderr.log</string>
+</dict>
+</plist>
