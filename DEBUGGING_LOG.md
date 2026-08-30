@@ -120,3 +120,59 @@ possible state it can report, not just the obvious success and failure
 ones. A state I forgot about does not always cause a crash. Sometimes it
 just quietly swallows the one signal my code was waiting for, and the
 program hangs with no clue why.
+
+---
+
+## 5. `import CSystemBridge` could not find `archive.h`, even with the right flags (Stage 2)
+
+**What broke.** I added `#include <archive.h>` to my C bridge target so
+Swift could call into libarchive. Even after installing libarchive with
+Homebrew and pointing the compiler straight at its include folder, I kept
+getting "archive.h file not found," and the exact place it failed kept
+moving around depending on what I tried next.
+
+**What caused it.** This took a few tries to fully understand, and each
+try taught me something new about how Swift Package Manager actually
+handles C code.
+
+First I added an include path setting directly on my own C target. That
+setting works fine when the target compiles its own C files, but it turns
+out it is not used when a completely different target, like Telemetry,
+tries to `import CSystemBridge` from Swift. Swift has to build a small
+model of that C target on its own in that moment, and it does not reuse
+the same settings.
+
+Then I tried Swift Package Manager's official "header search path" option
+instead. That one refused to even accept the folder path I gave it,
+because it only allows paths inside my own project folder, not an outside
+folder like the one Homebrew installs into.
+
+The real fix turned out to be a completely different kind of target that
+Swift Package Manager calls a system library target. It exists
+specifically for wrapping an already installed library that lives outside
+my project, and unlike a normal target, its settings do correctly carry
+over to any other target that depends on it.
+
+Once I had that working, one more piece was still confusing. libarchive
+successfully linked in without me telling the linker where to find it at
+all. I expected that to fail. It turned out macOS already ships its own
+copy of libarchive that the linker found automatically. I only actually
+needed Homebrew for the header files, which macOS does not ship publicly,
+not for the library itself. I confirmed this by checking which exact copy
+was linked into my program and by logging the real version number while
+it was running. It reported Apple's own version, not the newer one
+Homebrew had just installed.
+
+**How I fixed it.** I created a small separate target just for wrapping
+libarchive, with its own hand written module description pointing
+directly at Homebrew's header files. My own C bridge target went back to
+only holding code I actually wrote myself, and any Swift file that needs
+libarchive now depends on the new wrapper target directly instead of
+going through my own bridge target.
+
+**What to remember.** Getting a C library to compile is not the same
+problem as getting it to be visible from every place that needs it, and
+both of those are separate again from figuring out which actual copy of
+the library ends up running. All three are worth checking on their own,
+especially the last one, since a build that succeeds does not always tell
+me which library it actually chose to use.

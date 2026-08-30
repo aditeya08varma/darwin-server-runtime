@@ -1,0 +1,30 @@
+// A systemLibrary target's module map is hand-written, not auto-generated
+// by SwiftPM the way a normal C target's is. This is what actually makes
+// libarchive's headers visible to every target that depends on CArchive,
+// including cross-target Swift imports - a plain .target's cSettings only
+// apply when compiling that target's own C files, not when other targets
+// import it, which is exactly the propagation this systemLibrary target
+// exists to provide instead.
+//
+// Absolute paths are used directly here, rather than resolving through
+// pkg-config, because Homebrew installs libarchive "keg-only" (its .pc
+// file lives outside the default PKG_CONFIG_PATH) and this project already
+// assumes an Apple Silicon Homebrew layout elsewhere (see the launchd
+// plist and the CI workflow).
+//
+// Note on what actually links at runtime: macOS does ship its own public
+// libarchive dylib at /usr/lib, and without an explicit -L flag pointing
+// at Homebrew's lib directory, the linker resolves `link "archive"` to
+// that system copy instead of Homebrew's. Confirmed with `otool -L` and
+// by logging archive_version_string() at runtime: the running binary
+// reports Apple's bundled 3.7.4, not Homebrew's installed 3.8.9. Only the
+// *headers* are missing from the system and need Homebrew; the read APIs
+// this project uses are long-stable across libarchive versions, so this
+// header/runtime-library split is safe here, but it is worth knowing
+// about rather than assuming they are the same copy.
+module CArchive [system] {
+    header "/opt/homebrew/opt/libarchive/include/archive.h"
+    header "/opt/homebrew/opt/libarchive/include/archive_entry.h"
+    link "archive"
+    export *
+}

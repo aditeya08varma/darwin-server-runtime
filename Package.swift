@@ -22,14 +22,23 @@ let package = Package(
         // the daemon and the CLI. Pure Swift, no platform-specific code.
         .target(name: "RuntimeCore"),
 
-        // C interop layer. Wraps libarchive and Mach kernel headers so Swift
-        // code elsewhere in the project can call into them. Starts as an
-        // empty placeholder in Stage 0 and gains real bindings in Stages 2 and 4.
+        // A systemLibrary target: not code we compile, just a hand-written
+        // module map that makes an already-installed external library
+        // (Homebrew's libarchive) importable as `import CArchive`. See
+        // Sources/CArchive/module.modulemap for why libarchive gets its
+        // own dedicated target instead of being folded into CSystemBridge.
+        .systemLibrary(name: "CArchive"),
+
+        // C interop layer for our own hand-written C glue code (Mach
+        // kernel telemetry bindings, added in Stage 4). Does not wrap
+        // libarchive; see CArchive above for that.
         .target(name: "CSystemBridge"),
 
         // Tarball unpacking and cryptographic signature verification for
-        // server image bundles. Built out in Stage 2.
-        .target(name: "ImageStore", dependencies: ["RuntimeCore", "CSystemBridge"]),
+        // server image bundles. Depends on CArchive directly for
+        // libarchive, since libarchive's C API is called straight from
+        // Swift with no wrapper layer in between.
+        .target(name: "ImageStore", dependencies: ["RuntimeCore", "CSystemBridge", "CArchive"]),
 
         // Process isolation backends (Seatbelt sandbox-exec and a POSIX
         // fallback). Built out in Stage 3.
