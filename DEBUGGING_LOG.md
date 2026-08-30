@@ -540,3 +540,41 @@ things that both look like "a file you can run from the terminal" can
 behave in completely different ways under the hood, and the only way to
 know for sure is to try the actual case I care about, not a convenient
 stand-in for it.
+
+---
+
+## 14. A test that always passed alone started failing only when run with everything else (Stage 4)
+
+**What broke.** A test I had already written and trusted, the one
+checking that a program's memory usage gets measured correctly, suddenly
+failed. Nothing about that test's own code had changed. What changed was
+that I ran the entire test suite together, all at once, instead of that
+one test by itself.
+
+**What caused it.** That test worked by starting a small program,
+waiting a fixed, guessed amount of time, and then checking how much
+memory it was using. That guess was based on how long the program
+usually took when it was the only thing running on the machine. The
+moment it had to share the machine with dozens of other tests running at
+the same time, some of them fairly demanding themselves, that same fixed
+wait was no longer reliably long enough. The program simply had not
+finished doing its work yet by the time I went and measured it.
+
+**How I fixed it.** I stopped guessing how long to wait entirely.
+Instead, I changed the small test program itself to leave behind a
+simple, unmistakable signal, an empty marker file, the exact moment it
+had actually finished the specific work the test cared about. The test
+now waits for that real signal to appear, checking briefly and
+repeatedly, however long that actually takes, rather than assuming a
+fixed number of seconds is always enough. I applied the same fix to a
+second, similar test right next to it, since it had the exact same
+weakness even though it had not happened to fail yet.
+
+**What to remember.** A test passing by itself is not the same thing as
+a test being correct. Fixed waits are a common and easy way to make a
+test pass most of the time while still hiding a real race underneath,
+one that only shows up under exactly the kind of real-world pressure,
+many things happening on the machine at once, that is completely normal
+outside of a quiet, empty test run. Running the whole suite together
+regularly, not just the one test I am currently working on, is what
+actually caught this.

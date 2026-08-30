@@ -55,21 +55,45 @@ final class SoakTests: XCTestCase {
         return process
     }
 
+    /// Polls for `markerURL` to exist, up to `timeout` seconds. Used
+    /// instead of a fixed-duration sleep to wait for a fixture process to
+    /// reach a specific point in its own execution (like "finished
+    /// allocating and touching memory"). A fixed sleep cannot reliably
+    /// do this: under real system load - like running the rest of this
+    /// test suite at the same time - a duration that's comfortably long
+    /// on an idle machine can be too short, which is exactly what caused
+    /// this test to flake under full-suite runs before this fix. See
+    /// DEBUGGING_LOG.md.
+    private func waitForReadyMarker(at markerURL: URL, timeout: TimeInterval = 5) async throws {
+        let deadline = Date().addingTimeInterval(timeout)
+        while !FileManager.default.fileExists(atPath: markerURL.path) {
+            if Date() > deadline {
+                XCTFail("timed out waiting for ready marker at \(markerURL.path)")
+                return
+            }
+            try await Task.sleep(nanoseconds: 20_000_000)
+        }
+    }
+
     /// The core positive case: a real program that allocates and touches
     /// a known, sizable chunk of memory, signed the same way a real job
     /// would be, reports real, sane numbers back through
     /// MachMetricsSampler - not zero, not garbage.
     func testSampleReportsRealMemoryAndCPUUsage() async throws {
+        let readyMarkerURL = workDirectory.appendingPathComponent("ready")
         let process = try compileAndRun(
             """
             #include <unistd.h>
             #include <string.h>
             #include <stdlib.h>
+            #include <stdio.h>
             int main(void) {
                 size_t size = 20 * 1024 * 1024;
                 char *block = malloc(size);
                 memset(block, 1, size);
-                sleep(3);
+                FILE *marker = fopen("\(readyMarkerURL.path)", "w");
+                fclose(marker);
+                sleep(5);
                 return 0;
             }
             """,
@@ -80,8 +104,10 @@ final class SoakTests: XCTestCase {
             process.waitUntilExit()
         }
 
-        // Give it a moment to actually allocate and touch the memory.
-        try await Task.sleep(nanoseconds: 300_000_000)
+        // Wait for the fixture to actually finish allocating and
+        // touching its memory, not just for some guessed amount of time
+        // to pass.
+        try await waitForReadyMarker(at: readyMarkerURL)
 
         let metrics = try MachMetricsSampler.sample(pid: process.processIdentifier)
 
@@ -100,8 +126,18 @@ final class SoakTests: XCTestCase {
     /// task_for_pid is genuinely gating this rather than the whole thing
     /// silently no-op'ing into success for any PID handed to it.
     func testSampleFailsForUnsignedBinary() async throws {
+        let readyMarkerURL = workDirectory.appendingPathComponent("ready")
         let process = try compileAndRun(
-            "#include <unistd.h>\nint main(void) { sleep(3); return 0; }\n",
+            """
+            #include <unistd.h>
+            #include <stdio.h>
+            int main(void) {
+                FILE *marker = fopen("\(readyMarkerURL.path)", "w");
+                fclose(marker);
+                sleep(5);
+                return 0;
+            }
+            """,
             signed: false
         )
         defer {
@@ -109,7 +145,7 @@ final class SoakTests: XCTestCase {
             process.waitUntilExit()
         }
 
-        try await Task.sleep(nanoseconds: 300_000_000)
+        try await waitForReadyMarker(at: readyMarkerURL)
 
         XCTAssertThrowsError(try MachMetricsSampler.sample(pid: process.processIdentifier)) { error in
             guard case MachMetricsError.taskForPidFailed = error else {

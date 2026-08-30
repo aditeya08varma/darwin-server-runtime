@@ -121,7 +121,15 @@ queue between the sampler and the exporter - deliberately *not* called
 "lock-free" (a true lock-free SPSC ring buffer needs `ManagedBuffer` and
 manual atomics, more machinery than this project's sampling rate needs),
 proven safe under 100 genuinely concurrent appends with zero loss or
-corruption. Still to come: the OTLP exporter behind `darwin-run stats`.
+corruption. `OTelExporter` batches samples into OTLP/HTTP+JSON and POSTs
+them to a collector - port 4318 (OTLP/HTTP), not 4317 (OTLP/gRPC) as the
+original `--stream-otel` sketch implied, since gRPC needs the grpc-swift
+dependency, a bigger addition than this stage's scope calls for. Verified
+against a real local HTTP server capturing the actual wire-level request
+(Docker was installed but not running, so this proves genuine POST/JSON
+behavior rather than a mocked request; full collector-side spec
+compliance against a real OTel collector is not yet verified). Still to
+come: wiring this all up behind `darwin-run stats` itself.
 
 ## Deliberate departures from a "standard container runtime"
 
