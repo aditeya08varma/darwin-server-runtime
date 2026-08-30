@@ -2,6 +2,7 @@
 // verification) and Isolation (sandbox escape attempts). Stage 3 adds the
 // Isolation-side tests; ImageArchive's real unpacking tests are here now.
 import XCTest
+import CryptoKit
 @testable import ImageStore
 @testable import Isolation
 
@@ -103,5 +104,110 @@ final class SandboxSecurityTests: XCTestCase {
                 return
             }
         }
+    }
+
+    /// The core positive case for TrustVerifier: a tarball with a real,
+    /// validly signed manifest verifies successfully with no error.
+    func testVerifyAcceptsValidSignedManifest() throws {
+        let tarball = workDirectory.appendingPathComponent("bundle.tar.gz")
+        let manifestURL = workDirectory.appendingPathComponent("bundle.manifest.json")
+
+        try TarballFixture.write(entries: [TarballFixture.Entry(path: "app", content: "version 1")], to: tarball)
+        let publicKey = try SigningFixture.writeValidManifest(forTarballAt: tarball, to: manifestURL)
+
+        XCTAssertNoThrow(try TrustVerifier.verify(tarball: tarball, manifest: manifestURL, publicKey: publicKey))
+    }
+
+    /// If the tarball's bytes change after signing (a corrupted download,
+    /// or someone swapping in a different file at the same path) without
+    /// the manifest being updated to match, the hash check must catch it.
+    func testVerifyRejectsTarballThatDoesNotMatchManifestHash() throws {
+        let tarball = workDirectory.appendingPathComponent("bundle.tar.gz")
+        let manifestURL = workDirectory.appendingPathComponent("bundle.manifest.json")
+
+        try TarballFixture.write(entries: [TarballFixture.Entry(path: "app", content: "version 1")], to: tarball)
+        let publicKey = try SigningFixture.writeValidManifest(forTarballAt: tarball, to: manifestURL)
+
+        // Overwrite the tarball after the manifest was already signed for
+        // its original contents.
+        try "completely different bytes".data(using: .utf8)!.write(to: tarball)
+
+        XCTAssertThrowsError(try TrustVerifier.verify(tarball: tarball, manifest: manifestURL, publicKey: publicKey)) { error in
+            guard case TrustVerifierError.hashMismatch = error else {
+                XCTFail("expected hashMismatch, got \(error)")
+                return
+            }
+        }
+    }
+
+    /// If the manifest was signed by a different private key than the one
+    /// the caller expects (publicKey here), verification must fail even
+    /// though the hash matches perfectly, since the hash alone says
+    /// nothing about who produced the bundle.
+    func testVerifyRejectsSignatureFromWrongKey() throws {
+        let tarball = workDirectory.appendingPathComponent("bundle.tar.gz")
+        let manifestURL = workDirectory.appendingPathComponent("bundle.manifest.json")
+
+        try TarballFixture.write(entries: [TarballFixture.Entry(path: "app", content: "version 1")], to: tarball)
+        _ = try SigningFixture.writeValidManifest(forTarballAt: tarball, to: manifestURL)
+
+        let unrelatedKeyPair = Curve25519.Signing.PrivateKey()
+
+        XCTAssertThrowsError(
+            try TrustVerifier.verify(tarball: tarball, manifest: manifestURL, publicKey: unrelatedKeyPair.publicKey)
+        ) { error in
+            guard case TrustVerifierError.invalidSignature = error else {
+                XCTFail("expected invalidSignature, got \(error)")
+                return
+            }
+        }
+    }
+
+    /// The attack the two checks together are meant to catch: an attacker
+    /// swaps in a different tarball and rewrites the manifest's sha256
+    /// field to match it (so the hash check alone would pass), but cannot
+    /// produce a new valid signature without the private key, so the old
+    /// signature is left in place. The signature check must catch this
+    /// even though the hash check on its own would not have.
+    func testVerifyRejectsHashRewrittenToMatchSwappedTarball() throws {
+        let tarball = workDirectory.appendingPathComponent("bundle.tar.gz")
+        let manifestURL = workDirectory.appendingPathComponent("bundle.manifest.json")
+
+        try TarballFixture.write(entries: [TarballFixture.Entry(path: "app", content: "version 1")], to: tarball)
+        let publicKey = try SigningFixture.writeValidManifest(forTarballAt: tarball, to: manifestURL)
+        let originalManifest = try JSONDecoder().decode(BundleManifest.self, from: Data(contentsOf: manifestURL))
+
+        // Swap in a different tarball entirely.
+        try TarballFixture.write(entries: [TarballFixture.Entry(path: "app", content: "malicious version")], to: tarball)
+        let newHash = SHA256.hash(data: try Data(contentsOf: tarball)).map { String(format: "%02x", $0) }.joined()
+
+        // Rewrite the manifest's hash to match the new tarball, but keep
+        // the old signature, since forging a new one requires the private
+        // key, which an attacker does not have.
+        let forgedManifest = BundleManifest(
+            sha256: newHash,
+            signature: originalManifest.signature,
+            publicKeyHint: originalManifest.publicKeyHint
+        )
+        try JSONEncoder().encode(forgedManifest).write(to: manifestURL)
+
+        XCTAssertThrowsError(try TrustVerifier.verify(tarball: tarball, manifest: manifestURL, publicKey: publicKey)) { error in
+            guard case TrustVerifierError.invalidSignature = error else {
+                XCTFail("expected invalidSignature (hash check alone would have passed here), got \(error)")
+                return
+            }
+        }
+    }
+
+    /// TrustVerifier.loadPublicKey must correctly round-trip a key written
+    /// in the same base64 format darwin-run pull's --verify-key file uses.
+    func testLoadPublicKeyRoundTripsCorrectly() throws {
+        let keyURL = workDirectory.appendingPathComponent("key.pub")
+        let originalKey = Curve25519.Signing.PrivateKey().publicKey
+
+        try SigningFixture.writePublicKey(originalKey, to: keyURL)
+        let loadedKey = try TrustVerifier.loadPublicKey(from: keyURL)
+
+        XCTAssertEqual(loadedKey.rawRepresentation, originalKey.rawRepresentation)
     }
 }
