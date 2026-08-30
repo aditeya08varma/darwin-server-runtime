@@ -213,3 +213,49 @@ not the same as a comment that says "this was a problem, and here is what
 I changed to fix it." It is worth going back through my own notes every
 so often and asking, for each one, whether it is actually describing
 something I fixed, or just something I once noticed.
+
+---
+
+## 7. Two small but real type mismatches while calling libarchive from Swift (Stage 2)
+
+**What broke.** Two separate, smaller problems showed up while writing
+the real unpacking code and its test fixtures.
+
+First, I tried to use libarchive's own constants for "this entry is a
+regular file" and "this entry is a directory," called `AE_IFREG` and
+`AE_IFDIR` in its header file. Swift's compiler said it had never heard of
+either one, even though they are clearly written in the header I was
+importing.
+
+Second, once I worked around that and wrote my own version of those
+constants by hand, I tried to hand one of them to a real libarchive
+function while building a test fixture, and the compiler flatly refused,
+saying it expected a different, larger number type than the one I gave it.
+
+**What caused it.** For the first one, libarchive defines those constants
+using a C cast, something like `((special_type)0100000)`, not as a plain
+number. Swift's importer is only able to bring in plain number constants
+automatically. A constant with a cast wrapped around it does not come
+through at all, silently, so there was nothing wrong with my code, the
+constant just was never available to use in the first place.
+
+For the second one, once I picked my own type for my hand written
+constant, I picked one that felt reasonable but did not actually match
+what that specific libarchive function expects internally. C libraries
+are often inconsistent like this internally, using slightly different
+sized number types for what looks like the same kind of value in
+different places.
+
+**How I fixed it.** For the missing constants, I wrote my own copies by
+hand, using the exact same plain numbers straight from libarchive's header
+file, with a comment explaining why the originals never showed up. For the
+type mismatch, I simply used the exact type the compiler told me it
+wanted, instead of guessing.
+
+**What to remember.** When calling into a C library from Swift, it is
+worth remembering that not everything in a C header automatically becomes
+usable in Swift, and the types on each individual function can be more
+specific and less forgiving than they first appear. In both cases here,
+the Swift compiler's own error message told me exactly what was wrong and
+exactly what to do instead. Reading that message carefully was faster than
+trying to guess the right fix from memory.
