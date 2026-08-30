@@ -1,7 +1,7 @@
 // Entry point for darwin-runtimed, the background daemon executable.
 // Starts the Unix domain socket server and then keeps the process alive so
 // Network.framework's callback-driven listener has a chance to actually
-// run; job supervision (real .exec handling) is built out in Stage 3.
+// run.
 import Foundation
 import RuntimeCore
 import Telemetry

@@ -6,6 +6,7 @@ import CryptoKit
 import RuntimeCore
 @testable import ImageStore
 @testable import Isolation
+@testable import DarwinDaemon
 
 final class SandboxSecurityTests: XCTestCase {
     /// A fresh temporary directory for one test's tarball and rootfs, so
@@ -55,6 +56,33 @@ final class SandboxSecurityTests: XCTestCase {
             encoding: .utf8
         )
         XCTAssertEqual(nestedContent, "nested content")
+    }
+
+    /// Regression test for a real bug found during Stage 3's end-to-end
+    /// verification: ImageArchive used to create every extracted file
+    /// with FileManager's default permissions, silently discarding the
+    /// tarball entry's own executable bit. Every prior unpacking test
+    /// used plain text content, so this never surfaced until an actual
+    /// exec attempt against a freshly pulled bundle failed with "binary
+    /// not found or not executable." See DEBUGGING_LOG.md.
+    func testUnpackPreservesExecutablePermission() throws {
+        let tarball = workDirectory.appendingPathComponent("executable.tar.gz")
+        let rootfs = workDirectory.appendingPathComponent("rootfs")
+
+        try TarballFixture.write(
+            entries: [
+                TarballFixture.Entry(path: "app.sh", content: "#!/bin/sh\necho hi\n", permissions: 0o755)
+            ],
+            to: tarball
+        )
+
+        try ImageArchive.unpack(tarball: tarball, into: rootfs)
+
+        let extractedPath = rootfs.appendingPathComponent("app.sh").path
+        XCTAssertTrue(
+            FileManager.default.isExecutableFile(atPath: extractedPath),
+            "extracted file must keep the executable bit recorded in the tarball entry"
+        )
     }
 
     /// The security-critical negative case: a tarball containing an entry
@@ -467,5 +495,55 @@ final class SandboxSecurityTests: XCTestCase {
                 return
             }
         }
+    }
+
+    /// The one ProcessSupervisor behavior that could not be exercised
+    /// during manual end-to-end testing, because that test's process
+    /// happened to die cleanly from SIGTERM alone: a process that
+    /// deliberately ignores SIGTERM (via `trap '' TERM`) must still be
+    /// killed once the grace period elapses, via a real SIGKILL. Uses a
+    /// short 1-second gracePeriodSeconds override rather than the real 5
+    /// second production default, so this test doesn't have to wait that
+    /// long to prove the same behavior.
+    func testStopEscalatesToSIGKILLWhenProcessIgnoresSIGTERM() async throws {
+        let rootfs = workDirectory.appendingPathComponent("rootfs")
+        _ = try writeExecutableScript(
+            """
+            #!/bin/sh
+            trap '' TERM
+            while true; do sleep 0.1; done
+            """,
+            at: "stubborn.sh",
+            in: rootfs
+        )
+
+        let config = ExecConfig(binaryPath: "/stubborn.sh", rootfsPath: rootfs.path, isolated: false)
+        let state = DaemonState()
+
+        let startResponse = await ProcessSupervisor.start(config, state: state)
+        guard case .jobStarted(let jobID) = startResponse else {
+            XCTFail("expected jobStarted, got \(startResponse)")
+            return
+        }
+
+        // Give the script a moment to actually start and install its trap
+        // before sending SIGTERM.
+        try await Task.sleep(nanoseconds: 300_000_000)
+
+        let stopResponse = await ProcessSupervisor.stop(jobID: jobID, state: state, gracePeriodSeconds: 1)
+        guard case .stopped = stopResponse else {
+            XCTFail("expected stopped, got \(stopResponse)")
+            return
+        }
+
+        // Wait past the 1 second grace period, plus a buffer for the
+        // SIGKILL to actually land and the termination handler to run.
+        try await Task.sleep(nanoseconds: 2_000_000_000)
+
+        let finalState = await state.state(ofJob: jobID)
+        XCTAssertEqual(finalState, .killed)
+
+        let exitCode = await state.exitCode(ofJob: jobID)
+        XCTAssertEqual(exitCode, SIGKILL, "the process should have been killed with SIGKILL after ignoring SIGTERM")
     }
 }

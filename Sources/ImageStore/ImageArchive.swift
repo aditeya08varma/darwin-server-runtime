@@ -93,6 +93,7 @@ public enum ImageArchive {
                     withIntermediateDirectories: true
                 )
                 try extractRegularFile(from: archive, to: destination)
+                try applyPermissions(from: entry, to: destination)
             default:
                 continue
             }
@@ -138,6 +139,20 @@ public enum ImageArchive {
             }
             handle.write(Data(buffer[0..<bytesRead]))
         }
+    }
+
+    /// Applies the tarball entry's own file permission bits (its
+    /// executable bit, in particular) to the extracted file. Without
+    /// this, every extracted file silently gets FileManager's default
+    /// permissions (not executable) regardless of what the archive
+    /// actually recorded - a real gap that went unnoticed until Stage 3
+    /// tried to run something that had been extracted this way.
+    private static func applyPermissions(from entry: OpaquePointer, to destination: URL) throws {
+        let mode = archive_entry_perm(entry)
+        try FileManager.default.setAttributes(
+            [.posixPermissions: NSNumber(value: mode)],
+            ofItemAtPath: destination.path
+        )
     }
 
     /// Reads libarchive's own last-error message off the archive handle,

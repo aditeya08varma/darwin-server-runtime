@@ -83,7 +83,7 @@ let package = Package(
         // binary, so it needs the same explicit path.
         .testTarget(
             name: "SandboxSecurityTests",
-            dependencies: ["RuntimeCore", "Isolation", "ImageStore", "CArchive"],
+            dependencies: ["RuntimeCore", "Isolation", "ImageStore", "CArchive", "DarwinDaemon"],
             linkerSettings: [
                 .unsafeFlags(["-L/opt/homebrew/opt/libarchive/lib"])
             ]

@@ -390,3 +390,51 @@ or the whole check silently falls apart. When I am not sure two tools
 truly agree, comparing their actual output side by side, directly, is
 far more reliable than trusting that they must, because they sound like
 they should.
+
+---
+
+## 11. A file I pulled and unpacked myself refused to run, for a reason that had nothing to do with running it (Stage 3)
+
+**What broke.** After weeks of building the unpacking piece and the
+running piece separately, I finally connected the two for a real test:
+pull a real signed bundle, then actually run the program inside it. The
+run failed immediately with "binary not found or not executable," even
+though I could see the file sitting right there, in the right place,
+with the right name.
+
+**What caused it.** The file itself was completely fine. The problem was
+that it had been unpacked with the wrong permissions. Every file I had
+extracted from a tarball so far, going all the way back to when I first
+built the unpacking code, had been created with the same fixed, ordinary
+permissions, no matter what permissions the original file actually had
+before it was packed. I had simply never told the unpacking code to look
+at, or care about, that detail.
+
+This had been sitting there, silently wrong, since the unpacking code was
+first written. It never once caused a problem before now for one simple
+reason: every single test I had written for unpacking, including several
+fairly thorough ones, only ever checked files containing plain text. None
+of them ever needed to actually be run as a program, so a missing
+executable permission never had anything to trip over. The very first
+time that mattered was the very first time I tried to run something for
+real.
+
+**How I fixed it.** I went back to the unpacking code and added the one
+missing step: after writing a file's contents to disk, also copy over the
+permission bits that were actually recorded for it inside the original
+archive, instead of leaving whatever generic default my code had been
+using the entire time. I also went back and strengthened my test suite
+itself, adding a test that specifically packs a file marked as
+executable and confirms it comes back out of the unpacking step still
+marked as executable, so a mistake like this cannot quietly reappear
+later without a test noticing right away.
+
+**What to remember.** A whole category of real bug can hide indefinitely
+behind test data that is simply too simple to expose it. Every one of my
+earlier unpacking tests was a completely honest, real test, and every one
+of them genuinely passed. They just never happened to ask the one
+question that mattered here. Connecting two finished pieces together for
+a real, true end-to-end run, not just trusting that each one passed its
+own tests in isolation, is what actually surfaced this, and it is a good
+reminder to keep doing that kind of full, real test regularly rather than
+only testing each piece on its own.

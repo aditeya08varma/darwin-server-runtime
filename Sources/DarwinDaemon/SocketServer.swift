@@ -106,10 +106,9 @@ final class SocketServer {
 
     /// Decodes one complete frame as an IPCMessage, decides how to
     /// respond, and writes the framed IPCResponse back to the connection.
-    /// .ping and .pull are fully real as of Stage 2. .exec still gets an
-    /// honest "not implemented yet" reply, and .stop/.status honestly
-    /// report "no such job" for now, since no job can exist until Stage 3
-    /// wires up real process execution.
+    /// Every message kind is fully real as of Stage 3: .exec, .stop, and
+    /// .status all drive genuine process lifecycle through
+    /// ProcessSupervisor and DaemonState.
     private static func respond(to frame: Data, on connection: NWConnection, state: DaemonState) async {
         let response: IPCResponse
         do {
@@ -119,17 +118,14 @@ final class SocketServer {
                 response = .pong
             case .pull(let config):
                 response = BundlePuller.pull(config)
-            case .exec:
-                response = .error(message: "exec is not implemented until Stage 3")
+            case .exec(let config):
+                response = await ProcessSupervisor.start(config, state: state)
             case .stop(let jobID):
-                if await state.state(ofJob: jobID) != nil {
-                    response = .stopped(jobID: jobID)
-                } else {
-                    response = .error(message: "no such job: \(jobID)")
-                }
+                response = await ProcessSupervisor.stop(jobID: jobID, state: state)
             case .status(let jobID):
                 if let jobState = await state.state(ofJob: jobID) {
-                    response = .jobStatus(jobID: jobID, state: jobState, exitCode: nil)
+                    let exitCode = await state.exitCode(ofJob: jobID)
+                    response = .jobStatus(jobID: jobID, state: jobState, exitCode: exitCode)
                 } else {
                     response = .error(message: "no such job: \(jobID)")
                 }

@@ -17,6 +17,10 @@ enum TarballFixture {
     struct Entry {
         let path: String
         let content: String
+        /// Defaults to a plain, non-executable file. Tests that need to
+        /// confirm ImageArchive actually preserves an entry's executable
+        /// bit (see DEBUGGING_LOG.md on that bug) pass 0o755 explicitly.
+        var permissions: UInt16 = 0o644
     }
 
     /// libarchive's file-type macros don't import into Swift (see the
@@ -27,9 +31,8 @@ enum TarballFixture {
     private static let regularFileType: UInt32 = 0o100000
 
     /// Writes a tar.gz archive containing exactly the given entries, in
-    /// order, to `url`. Each entry is written as a regular file with
-    /// fixed, uninteresting permissions, since none of these tests care
-    /// about permission bits, only about paths and content.
+    /// order, to `url`. Each entry is written as a regular file, carrying
+    /// whatever permissions its Entry specifies.
     static func write(entries: [Entry], to url: URL) throws {
         guard let archive = archive_write_new() else {
             throw TarballFixtureError.writeFailed("archive_write_new returned no archive")
@@ -53,7 +56,7 @@ enum TarballFixture {
             archive_entry_set_pathname(archiveEntry, entry.path)
             archive_entry_set_filetype(archiveEntry, regularFileType)
             archive_entry_set_size(archiveEntry, Int64(contentBytes.count))
-            archive_entry_set_perm(archiveEntry, 0o644)
+            archive_entry_set_perm(archiveEntry, entry.permissions)
 
             guard archive_write_header(archive, archiveEntry) == ARCHIVE_OK else {
                 throw TarballFixtureError.writeFailed(String(cString: archive_error_string(archive)))
