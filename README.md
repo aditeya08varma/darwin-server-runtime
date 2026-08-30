@@ -97,10 +97,21 @@ verified live end to end, including two real bugs caught only by that
 live run (a path-canonicalization mismatch, and lost file permissions on
 extraction — see `DEBUGGING_LOG.md` #10 and #11).
 
-**Stage 4 — Telemetry & OpenTelemetry exporter** ⬜ not started
-Mach `task_info` sampling of the daemon's own children, a bounded
-actor-guarded ring buffer, and an OTLP/HTTP exporter behind `darwin-run
-stats`.
+**Stage 4 — Telemetry & OpenTelemetry exporter** 🚧 in progress
+The core assumption behind this whole stage turned out to be backwards:
+`task_for_pid` (needed to sample a job's real memory/CPU) does *not*
+work just because the daemon spawned the process — the *target binary
+itself* has to be signed with `get-task-allow`, discovered by testing
+several variations directly rather than trusting the first one that
+happened to work. `JobSigner` now ad-hoc signs each job's resolved binary
+right before spawn, proven through the real `ProcessSupervisor` pipeline
+with a genuinely compiled test binary. One further real limit found:
+this only works for compiled binaries, not shebang scripts, since the
+kernel actually executes the interpreter (Apple's own signed `/bin/sh`)
+as the real process image, not the script text — confirmed by testing
+both cases side by side. See `DEBUGGING_LOG.md` #12 and #13. Still to
+come: the actual `task_info` sampling code, the ring buffer, and the
+OTLP exporter behind `darwin-run stats`.
 
 ## Deliberate departures from a "standard container runtime"
 
@@ -110,9 +121,16 @@ Honest tradeoffs, not oversights:
   private `sandbox_init()` API in-process, which fights Swift's runtime.
   Still genuinely Seatbelt-based isolation, just through a usable entry
   point.
-- **Telemetry will only cover processes the daemon itself spawns.**
-  Sampling an arbitrary PID's Mach task needs a debugging entitlement
-  this project doesn't have; spawning your own children sidesteps that.
+- **Telemetry only covers genuinely compiled job binaries, and each one
+  gets ad-hoc signed at spawn time.** The original assumption — that a
+  process could sample its own spawned children's Mach task without
+  extra work — was tested directly and found to be backwards: the
+  *target* binary must itself carry the `get-task-allow` entitlement, not
+  the daemon watching it. `JobSigner` signs each job's binary right
+  before it runs. This doesn't extend to shebang scripts, since the
+  kernel executes the named interpreter (e.g. `/bin/sh`) as the real
+  process, not the script text, and re-signing a system interpreter isn't
+  something this project does. See `DEBUGGING_LOG.md` #12 and #13.
 - **CPU limits are real and kernel-enforced; memory limits are not
   enforced at all.** Tested three independent ways — all three refuse to
   lower memory-related rlimits on macOS. `--memory-limit` is accepted and

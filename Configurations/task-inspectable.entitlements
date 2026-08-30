@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+    Applied by JobSigner to a job's own binary, right before it is
+    spawned - not to darwin-runtimed itself. Required for Stage 4's Mach
+    kernel telemetry: task_for_pid() - the call needed to sample a
+    process's real memory and CPU usage - fails with KERN_FAILURE unless
+    the TARGET process carries this entitlement. This is the opposite of
+    what was originally assumed (that the watching process needed the
+    entitlement, not the process being watched), and was only found by
+    testing several variations directly rather than trusting the first
+    version that happened to work. See DEBUGGING_LOG.md #12 for the full
+    story, including the specific variations tried and ruled out
+    (entitling the daemon instead of the job, and the stronger
+    com.apple.security.cs.debugger entitlement, which needs real Apple
+    provisioning that ad-hoc signing cannot grant).
+-->
+<plist version="1.0">
+<dict>
+    <key>com.apple.security.get-task-allow</key>
+    <true/>
+</dict>
+</plist>

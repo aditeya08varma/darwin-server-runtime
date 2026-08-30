@@ -44,6 +44,13 @@ enum BinaryPathResolver {
         guard FileManager.default.isExecutableFile(atPath: candidate.path) else {
             throw IsolationError.binaryNotFound(binaryPath)
         }
+
+        // Signed here, on the raw resolved path, before either backend
+        // wraps it (sandbox-exec puts it in an argument, ResourceLimits
+        // can wrap it in /bin/sh) - see JobSigner for why it has to
+        // happen at exactly this point.
+        JobSigner.makeInspectable(candidate)
+
         return candidate
     }
 }

@@ -438,3 +438,105 @@ a real, true end-to-end run, not just trusting that each one passed its
 own tests in isolation, is what actually surfaced this, and it is a good
 reminder to keep doing that kind of full, real test regularly rather than
 only testing each piece on its own.
+
+---
+
+## 12. My plan's core assumption about telemetry was backwards (Stage 4)
+
+**What broke.** Before writing any real code for Stage 4, I wrote a tiny
+standalone test program to check something the whole telemetry design
+depended on: whether my own daemon can read basic stats, like memory
+usage, from a program it just started running. The very first, simplest
+version of that test failed outright. The daemon could not read anything
+about its own child process at all.
+
+**What caused it.** macOS treats this specific ability, one program
+peeking at another program's memory and CPU usage, as sensitive by
+default, for good reason: it is also exactly the ability a debugger
+needs, and also exactly the ability something malicious would want. My
+original assumption, carried over from the very first planning
+conversation, was that this would work automatically as long as the
+daemon was looking at a process it had started itself, no extra
+permission needed.
+
+I tested that assumption directly, several different ways, rather than
+trust it. My first test used a very simple technique, duplicating my own
+already-running program in place, and that version worked once I signed
+my own test program with one specific permission flag. That looked like
+confirmation my original assumption was right. But when I tried the
+much more realistic version, my program starting a genuinely separate,
+different program the normal way, the exact same signed permission flag
+suddenly stopped working. I tried giving that same permission to the
+program doing the watching. Still nothing. I tried a stronger, more
+official-sounding debugging permission instead. Still nothing.
+
+It was only when I flipped my thinking around entirely, and instead gave
+that permission to the program being watched, rather than the program
+doing the watching, that everything started working immediately. The
+real rule turns out to be the opposite of what I had assumed the whole
+time: it is not enough for the daemon to be allowed to look at things.
+The specific program being run has to individually agree to be looked
+at.
+
+**How I fixed it.** I have not written the real telemetry sampling code
+yet. What I fixed first was my own understanding, before building
+anything else on top of it. The real, confirmed design is: before
+running any program the daemon wants to measure, the daemon itself first
+has to apply this specific permission to that exact program. This is a
+meaningfully bigger, more hands-on step than my original assumption of
+"this happens automatically for anything I start," and it changes what
+Stage 4 actually needs to build.
+
+**What to remember.** The most important assumption in an entire stage
+of work is exactly the one most worth testing first, in isolation, with
+the smallest possible example, before writing anything real on top of
+it. If I had started by writing the full sampling feature first and only
+tested it at the very end, I would have discovered this same problem
+much later, with far more code already built on top of a wrong idea of
+how the underlying permission actually works. Testing the riskiest,
+least certain assumption first, even with a five-minute throwaway
+script, is worth doing before committing to a design built on top of it.
+
+---
+
+## 13. Marking a script as trustworthy did not actually mark the thing that runs (Stage 4)
+
+**What broke.** Right after fixing entry 12, I built the actual piece
+that applies the special permission to a job right before running it,
+and tested it end to end. It worked perfectly for a small program I had
+compiled myself. It silently did nothing at all for an ordinary shell
+script doing the exact same thing.
+
+**What caused it.** A shell script is not really "run" the way a normal
+program is. When the system sees the special `#!` line at the top of a
+script, it does not treat the script itself as the real program at all.
+Instead, it quietly starts up whichever program that line names, usually
+a shell, and hands the script to that program to read and follow, more
+like a to-do list than a program in its own right. The permission I was
+applying was being written onto the to-do list. The operating system,
+underneath, was actually running the shell that reads the list, and that
+shell is a separate, already existing program supplied by Apple that I
+never touched at all.
+
+I confirmed this precisely by running the exact same test twice, changed
+in only one way: once against a small compiled program, and once against
+an ordinary shell script doing the same job. The compiled program worked
+immediately. The script failed every time, in exactly the same way,
+confirming this was not a fluke.
+
+**How I fixed it.** I did not try to force this to work for scripts. That
+would have meant altering a program Apple ships as part of the operating
+system itself, which is not something this project should be doing.
+Instead, I wrote down plainly, right in the code and in this log, exactly
+which kind of job this feature actually works for: genuinely compiled
+programs, not shell scripts. That is a real, honest boundary on what this
+part of the project can do, not a bug still waiting to be fixed.
+
+**What to remember.** "It worked" is only ever true for the exact thing I
+actually tested it with. My very first successful test used a compiled
+program, and it would have been easy to assume the same result would
+carry over to any other kind of runnable file without checking. Two
+things that both look like "a file you can run from the terminal" can
+behave in completely different ways under the hood, and the only way to
+know for sure is to try the actual case I care about, not a convenient
+stand-in for it.

@@ -3,6 +3,7 @@
 // Isolation-side tests; ImageArchive's real unpacking tests are here now.
 import XCTest
 import CryptoKit
+import Darwin
 import RuntimeCore
 @testable import ImageStore
 @testable import Isolation
@@ -252,6 +253,34 @@ final class SandboxSecurityTests: XCTestCase {
         try contents.write(to: scriptURL, atomically: true, encoding: .utf8)
         try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: scriptURL.path)
         return scriptURL
+    }
+
+    /// Compiles a tiny real C program into `directory` at `relativePath`
+    /// and returns it, by shelling out to the system's own clang. Used
+    /// specifically where a genuinely compiled Mach-O binary is required
+    /// rather than a shebang script - see JobSigner's own documentation
+    /// and DEBUGGING_LOG.md #13 for why that distinction matters.
+    private func compileTinyBinary(at relativePath: String, in directory: URL) throws -> URL {
+        let sourceURL = directory.appendingPathComponent(relativePath + ".c")
+        let binaryURL = directory.appendingPathComponent(relativePath)
+        try FileManager.default.createDirectory(
+            at: binaryURL.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        try "#include <unistd.h>\nint main(void) { sleep(3); return 0; }\n".write(
+            to: sourceURL,
+            atomically: true,
+            encoding: .utf8
+        )
+
+        let clang = Process()
+        clang.executableURL = URL(fileURLWithPath: "/usr/bin/clang")
+        clang.arguments = ["-o", binaryURL.path, sourceURL.path]
+        try clang.run()
+        clang.waitUntilExit()
+        XCTAssertEqual(clang.terminationStatus, 0, "clang failed to compile the test fixture binary")
+
+        return binaryURL
     }
 
     /// The core positive case for POSIXIsolationEngine: a real script
@@ -545,5 +574,41 @@ final class SandboxSecurityTests: XCTestCase {
 
         let exitCode = await state.exitCode(ofJob: jobID)
         XCTAssertEqual(exitCode, SIGKILL, "the process should have been killed with SIGKILL after ignoring SIGTERM")
+    }
+
+    /// Proves JobSigner actually works through the real, full pipeline -
+    /// not the standalone probe scripts used to work out the design in
+    /// the first place. A genuinely compiled binary, spawned the normal
+    /// way through ProcessSupervisor, must be inspectable via
+    /// task_for_pid afterward. Uses isolated: false (the POSIX backend)
+    /// since signing behavior itself doesn't depend on which isolation
+    /// backend was used; BinaryPathResolver signs the binary the same
+    /// way regardless.
+    func testJobSignerMakesARealSpawnedBinaryInspectable() async throws {
+        let rootfs = workDirectory.appendingPathComponent("rootfs")
+        let binaryURL = try compileTinyBinary(at: "sleeper", in: rootfs)
+
+        let config = ExecConfig(binaryPath: "/" + binaryURL.lastPathComponent, rootfsPath: rootfs.path, isolated: false)
+        let state = DaemonState()
+
+        let response = await ProcessSupervisor.start(config, state: state)
+        guard case .jobStarted(let jobID) = response else {
+            XCTFail("expected jobStarted, got \(response)")
+            return
+        }
+
+        // Give the process a moment to actually be running before probing it.
+        try await Task.sleep(nanoseconds: 300_000_000)
+
+        guard let process = await state.process(forJob: jobID) else {
+            XCTFail("expected a running process for job \(jobID)")
+            return
+        }
+
+        var task: task_t = 0
+        let kr = task_for_pid(mach_task_self_, process.processIdentifier, &task)
+        XCTAssertEqual(kr, KERN_SUCCESS, "JobSigner should have made this compiled binary inspectable via task_for_pid")
+
+        process.terminate()
     }
 }
