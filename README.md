@@ -16,8 +16,14 @@ mechanism, `launchd`, and Mach kernel telemetry — no VM involved.
 ## Quick example
 
 ```bash
-# Sign and package a workload elsewhere, then:
-darwin-run pull my-app.tar.gz --verify-key release.pub
+# Package and sign a workload (scripts/sign-bundle.swift is a dev
+# convenience - a fresh throwaway keypair each run, not real key
+# management):
+tar -czf my-app.tar.gz -C my-app-directory .
+swift scripts/sign-bundle.swift my-app.tar.gz
+# → writes my-app.tar.gz.manifest.json and verify-key.pub
+
+darwin-run pull my-app.tar.gz --verify-key verify-key.pub
 # → pulled bundle 30DA648C-..., unpacked to ~/Library/Application Support/darwin-runtime/jobs/30DA648C-.../rootfs
 
 # Flags for darwin-run itself go BEFORE the rootfs path - anything after
