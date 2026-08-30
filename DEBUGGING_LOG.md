@@ -176,3 +176,40 @@ both of those are separate again from figuring out which actual copy of
 the library ends up running. All three are worth checking on their own,
 especially the last one, since a build that succeeds does not always tell
 me which library it actually chose to use.
+
+---
+
+## 6. I noticed a real problem, wrote it down, and then did not actually fix it (Stage 2)
+
+**What broke.** Nothing crashed here. This is a different kind of mistake.
+While confirming entry 5 above, I found out my program was quietly running
+against macOS's own older copy of libarchive, version 3.7.4, instead of
+the newer one I had just installed through Homebrew, version 3.8.9. I
+wrote all of that down clearly in a code comment at the time. Then I moved
+on to the next thing without actually changing anything about it.
+
+**What caused it.** I judged, in the moment, that this was probably safe,
+since the handful of functions I am using have worked the same way across
+many versions of libarchive. That judgment call was reasonable enough. But
+writing an honest note about a problem is not the same thing as solving
+it, and I let those two things blur together. It was only because I got
+asked directly, "so there is no issue either way, right?", that I actually
+went back and looked at it again properly instead of assuming my earlier
+note meant it was handled.
+
+**How I fixed it.** I added an explicit instruction telling the linker
+exactly where Homebrew's copy of libarchive lives, on both of the two
+places that actually link the final program together. I confirmed the fix
+worked for real by checking which exact file got linked in with `otool -L`,
+and by asking the running program to say its own version number out loud
+again. It now correctly reports 3.8.9, matching the same version its
+header files describe, instead of the older 3.7.4 it was silently using
+before.
+
+**What to remember.** Writing down a problem honestly is a good habit, but
+it can quietly feel like closing the loop on it even when nothing has
+actually been fixed yet. A comment that says "this could be a problem" is
+not the same as a comment that says "this was a problem, and here is what
+I changed to fix it." It is worth going back through my own notes every
+so often and asking, for each one, whether it is actually describing
+something I fixed, or just something I once noticed.

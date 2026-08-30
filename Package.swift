@@ -50,9 +50,21 @@ let package = Package(
 
         // The background daemon executable, darwin-runtimed. Hosts the Unix
         // domain socket server and owns job lifecycle.
+        //
+        // The -L flag here forces the linker to resolve libarchive against
+        // Homebrew's copy in this final binary, rather than falling back
+        // to whatever system copy happens to be on the default search
+        // path. Without it, this target's headers (from CArchive, pointed
+        // at Homebrew's 3.8.9) and its actual linked library (macOS's
+        // bundled 3.7.4) would be two different builds of libarchive that
+        // happen to agree today, not something guaranteed to keep
+        // agreeing. See DEBUGGING_LOG.md for how this was found.
         .executableTarget(
             name: "DarwinDaemon",
-            dependencies: ["RuntimeCore", "ImageStore", "Isolation", "Telemetry"]
+            dependencies: ["RuntimeCore", "ImageStore", "Isolation", "Telemetry"],
+            linkerSettings: [
+                .unsafeFlags(["-L/opt/homebrew/opt/libarchive/lib"])
+            ]
         ),
 
         // The user-facing CLI executable, darwin-run. Talks to the daemon
@@ -66,7 +78,16 @@ let package = Package(
         ),
 
         .testTarget(name: "RuntimeCoreTests", dependencies: ["RuntimeCore"]),
-        .testTarget(name: "SandboxSecurityTests", dependencies: ["Isolation", "ImageStore"]),
+        // Same -L reasoning as DarwinDaemon above: this test bundle also
+        // links ImageStore (and therefore CArchive) into its own final
+        // binary, so it needs the same explicit path.
+        .testTarget(
+            name: "SandboxSecurityTests",
+            dependencies: ["Isolation", "ImageStore"],
+            linkerSettings: [
+                .unsafeFlags(["-L/opt/homebrew/opt/libarchive/lib"])
+            ]
+        ),
         .testTarget(name: "SoakTests", dependencies: ["Telemetry"])
     ]
 )

@@ -12,16 +12,19 @@
 // assumes an Apple Silicon Homebrew layout elsewhere (see the launchd
 // plist and the CI workflow).
 //
-// Note on what actually links at runtime: macOS does ship its own public
-// libarchive dylib at /usr/lib, and without an explicit -L flag pointing
-// at Homebrew's lib directory, the linker resolves `link "archive"` to
-// that system copy instead of Homebrew's. Confirmed with `otool -L` and
-// by logging archive_version_string() at runtime: the running binary
-// reports Apple's bundled 3.7.4, not Homebrew's installed 3.8.9. Only the
-// *headers* are missing from the system and need Homebrew; the read APIs
-// this project uses are long-stable across libarchive versions, so this
-// header/runtime-library split is safe here, but it is worth knowing
-// about rather than assuming they are the same copy.
+// Note on what links at runtime: macOS also ships its own public libarchive
+// dylib at /usr/lib. Without an explicit -L flag, the linker would resolve
+// `link "archive"` to that system copy instead of Homebrew's, which was
+// confirmed with `otool -L` and by logging archive_version_string() at
+// runtime: it reported Apple's bundled 3.7.4, not Homebrew's 3.8.9, even
+// though the headers this module map exposes come from 3.8.9. That header
+// and runtime library mismatch happened to be harmless for the small,
+// long-stable subset of the API used here, but "happened to be harmless"
+// is not the same as correct, so DarwinDaemon and SandboxSecurityTests
+// (the two final linked products that actually pull libarchive in) now
+// carry an explicit `-L/opt/homebrew/opt/libarchive/lib` linkerSetting in
+// Package.swift, forcing them to link the same copy these headers
+// describe. See DEBUGGING_LOG.md for the full story.
 module CArchive [system] {
     header "/opt/homebrew/opt/libarchive/include/archive.h"
     header "/opt/homebrew/opt/libarchive/include/archive_entry.h"
