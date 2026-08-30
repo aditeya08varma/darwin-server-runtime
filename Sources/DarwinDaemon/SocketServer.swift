@@ -106,9 +106,9 @@ final class SocketServer {
 
     /// Decodes one complete frame as an IPCMessage, decides how to
     /// respond, and writes the framed IPCResponse back to the connection.
-    /// Every message kind is fully real as of Stage 3: .exec, .stop, and
-    /// .status all drive genuine process lifecycle through
-    /// ProcessSupervisor and DaemonState.
+    /// Every message kind is fully real as of Stage 4: .exec, .stop,
+    /// .status, and .stats all drive genuine process lifecycle and
+    /// telemetry through ProcessSupervisor, StatsStreamer, and DaemonState.
     private static func respond(to frame: Data, on connection: NWConnection, state: DaemonState) async {
         let response: IPCResponse
         do {
@@ -129,6 +129,8 @@ final class SocketServer {
                 } else {
                     response = .error(message: "no such job: \(jobID)")
                 }
+            case .stats(let jobID, let endpoint):
+                response = await StatsStreamer.start(jobID: jobID, endpoint: endpoint, state: state)
             }
         } catch {
             response = .error(message: "could not decode request: \(error.localizedDescription)")

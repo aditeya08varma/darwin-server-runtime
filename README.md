@@ -20,18 +20,23 @@ mechanism, `launchd`, and Mach kernel telemetry — no VM involved.
 darwin-run pull my-app.tar.gz --verify-key release.pub
 # → pulled bundle 30DA648C-..., unpacked to ~/Library/Application Support/darwin-runtime/jobs/30DA648C-.../rootfs
 
-darwin-run exec "<rootfs path from above>" /server.sh --cpu-limit 60
+# Flags for darwin-run itself go BEFORE the rootfs path - anything after
+# the binary path is passed through to the job, not parsed as a flag.
+darwin-run exec --cpu-limit 60 "<rootfs path from above>" /server
 # → job started: 56ACE166-...
 
 darwin-run status 56ACE166-...
 # → job 56ACE166-...: running
+
+darwin-run stats 56ACE166-... --stream-otel http://localhost:4318/v1/metrics
+# → streaming stats for job 56ACE166-... to http://localhost:4318/v1/metrics
 
 darwin-run stop 56ACE166-...
 # → stop signal sent to job 56ACE166-...
 ```
 
 Every command above has actually been run against a real signed bundle
-during development — see the Stage 3 notes below.
+during development — see the Stage 3 and Stage 4 notes below.
 
 ## Architecture
 
@@ -97,39 +102,47 @@ verified live end to end, including two real bugs caught only by that
 live run (a path-canonicalization mismatch, and lost file permissions on
 extraction — see `DEBUGGING_LOG.md` #10 and #11).
 
-**Stage 4 — Telemetry & OpenTelemetry exporter** 🚧 in progress
-The core assumption behind this whole stage turned out to be backwards:
-`task_for_pid` (needed to sample a job's real memory/CPU) does *not*
-work just because the daemon spawned the process — the *target binary
-itself* has to be signed with `get-task-allow`, discovered by testing
-several variations directly rather than trusting the first one that
-happened to work. `JobSigner` now ad-hoc signs each job's resolved binary
-right before spawn, proven through the real `ProcessSupervisor` pipeline
-with a genuinely compiled test binary. One further real limit found:
-this only works for compiled binaries, not shebang scripts, since the
-kernel actually executes the interpreter (Apple's own signed `/bin/sh`)
-as the real process image, not the script text — confirmed by testing
-both cases side by side. See `DEBUGGING_LOG.md` #12 and #13.
-`MachMetricsSampler` now reads real `TASK_VM_INFO`/`TASK_THREAD_TIMES_INFO`
-data - written entirely in Swift via `import Darwin`, no C bridging
-needed, since Mach APIs are part of the standard SDK unlike `libarchive`.
-Proven with real numbers, not just passing assertions: a program that
-allocates and touches 20MB reported 21.3MB resident, and sampling an
-unsigned binary fails with the expected, specific error rather than
-silently returning zero. `MetricsRingBuffer` is a bounded, actor-guarded
-queue between the sampler and the exporter - deliberately *not* called
-"lock-free" (a true lock-free SPSC ring buffer needs `ManagedBuffer` and
-manual atomics, more machinery than this project's sampling rate needs),
-proven safe under 100 genuinely concurrent appends with zero loss or
-corruption. `OTelExporter` batches samples into OTLP/HTTP+JSON and POSTs
-them to a collector - port 4318 (OTLP/HTTP), not 4317 (OTLP/gRPC) as the
-original `--stream-otel` sketch implied, since gRPC needs the grpc-swift
-dependency, a bigger addition than this stage's scope calls for. Verified
-against a real local HTTP server capturing the actual wire-level request
-(Docker was installed but not running, so this proves genuine POST/JSON
-behavior rather than a mocked request; full collector-side spec
-compliance against a real OTel collector is not yet verified). Still to
-come: wiring this all up behind `darwin-run stats` itself.
+**Stage 4 — Telemetry & OpenTelemetry exporter** ✅ done
+
+- **The core assumption behind this whole stage was backwards.**
+  `task_for_pid` does not work just because the daemon spawned a process —
+  the *target binary itself* must be signed with `get-task-allow`, found
+  by testing several variations directly rather than trusting the first
+  one that happened to work (root vs. entitled caller vs. entitled
+  target; a compiled binary vs. a shebang script). `JobSigner` now
+  ad-hoc signs each job's resolved binary right before spawn. Only works
+  for compiled binaries, not scripts, since the kernel executes the
+  named interpreter as the real process image, not the script text. See
+  `DEBUGGING_LOG.md` #12 and #13.
+- **`MachMetricsSampler`** reads real Mach `task_info` data - pure Swift
+  via `import Darwin`, no C bridging needed, since these are standard SDK
+  APIs unlike `libarchive`. One field was quietly wrong: `resident_size`
+  (the obvious-looking choice) reported under 1MB for a job that had
+  allocated and touched 15MB, consistently, regardless of sandboxing -
+  `phys_footprint`, Apple's actual recommended replacement, correctly
+  reported ~15.9MB once switched. An earlier unit test with a loose
+  "greater than 5MB" threshold had not caught this; only the full live
+  `pull → exec → stats` run, checked against a number computed by hand,
+  did. See `DEBUGGING_LOG.md` #15.
+- **`MetricsRingBuffer`** is a bounded, actor-guarded queue between the
+  sampler and the exporter - deliberately *not* called "lock-free" (a
+  true lock-free SPSC ring buffer needs `ManagedBuffer` and manual
+  atomics, more than this project's sampling rate needs), proven safe
+  under 100 genuinely concurrent appends with zero loss or corruption.
+- **`OTelExporter`** batches samples into OTLP/HTTP+JSON and POSTs to a
+  collector - port 4318 (OTLP/HTTP), not 4317 (OTLP/gRPC) as the original
+  `--stream-otel` sketch implied, since gRPC needs the `grpc-swift`
+  dependency. Verified against a real local HTTP server capturing the
+  actual wire-level request (Docker was installed but not running, so
+  this proves genuine POST/JSON behavior, not full collector-side OTLP
+  spec compliance against a real collector).
+- **`StatsStreamer`** connects all three into a real periodic loop -
+  sample, buffer, batch-export every 5 samples - wired to `darwin-run
+  stats`, and gives up cleanly (logged once, not spammed) after 3
+  consecutive sampling failures, covering the script-binary case above.
+  Verified fully live: a real compiled server bundle, pulled and exec'd,
+  streamed multiple real OTLP batches to a local collector over several
+  seconds, with real, correct, independently-verifiable memory numbers.
 
 ## Deliberate departures from a "standard container runtime"
 

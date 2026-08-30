@@ -112,10 +112,17 @@ final class SoakTests: XCTestCase {
         let metrics = try MachMetricsSampler.sample(pid: process.processIdentifier)
 
         // 20MB was allocated and fully touched (memset, not just
-        // malloc'd), so resident memory should reflect a meaningful
-        // fraction of that - comfortably distinguishing a real
-        // measurement from zero or a nonsense small number.
-        XCTAssertGreaterThan(metrics.residentBytes, 5 * 1024 * 1024)
+        // malloc'd), so real memory usage should land close to that
+        // number, not just "more than a small amount." This range check
+        // (18-30MB, not just ">5MB") is deliberately tight: a loose
+        // "greater than 5MB" threshold is exactly what let a real bug
+        // slip through here before - task_info's resident_size field
+        // reported well under 1MB for this same 20MB allocation and
+        // still would have passed a >5MB check, while phys_footprint
+        // (what this now reads) correctly lands in this range. See
+        // DEBUGGING_LOG.md #15.
+        XCTAssertGreaterThan(metrics.residentBytes, 18 * 1024 * 1024)
+        XCTAssertLessThan(metrics.residentBytes, 30 * 1024 * 1024)
         XCTAssertGreaterThanOrEqual(metrics.userTimeSeconds, 0)
         XCTAssertGreaterThanOrEqual(metrics.systemTimeSeconds, 0)
     }

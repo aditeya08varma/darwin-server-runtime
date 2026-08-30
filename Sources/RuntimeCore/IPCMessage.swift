@@ -94,6 +94,12 @@ public enum IPCMessage: Codable, Sendable, Equatable {
 
     /// A request for the current status of the job with the given ID.
     case status(jobID: String)
+
+    /// A request to start streaming real memory/CPU telemetry for the
+    /// given running job to an OTLP/HTTP+JSON collector at `endpoint`
+    /// (e.g. "http://localhost:4318/v1/metrics"). Streaming runs until
+    /// the job itself finishes; there is no separate stop message for it.
+    case stats(jobID: String, endpoint: String)
 }
 
 /// Every kind of reply the daemon can send back, always exactly one per request.
@@ -123,6 +129,12 @@ public enum IPCResponse: Codable, Sendable, Equatable {
     /// Sent back for .status: the job's current lifecycle state, and its
     /// exit code once it has actually exited (nil while still running).
     case jobStatus(jobID: String, state: JobState, exitCode: Int32?)
+
+    /// Sent back for .stats once the daemon has confirmed the job is
+    /// running and started the background sampling loop for it. Does not
+    /// mean any data has been exported yet - the loop samples and
+    /// batches on its own schedule after this reply is sent.
+    case statsStarted(jobID: String)
 
     /// Sent back whenever a request could not be fulfilled, carrying a
     /// human-readable reason the CLI can print directly to the user.

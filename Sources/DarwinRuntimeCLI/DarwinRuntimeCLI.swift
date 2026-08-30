@@ -16,7 +16,7 @@ struct DarwinRun: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "darwin-run",
         abstract: "Client for the darwin-server-runtime daemon.",
-        subcommands: [Ping.self, Pull.self, Exec.self, Stop.self, Status.self]
+        subcommands: [Ping.self, Pull.self, Exec.self, Stop.self, Status.self, Stats.self]
     )
 }
 
@@ -87,8 +87,19 @@ struct Pull: AsyncParsableCommand {
 /// Runs a binary from an already-pulled bundle, sandboxed and
 /// resource-limited according to the given flags.
 struct Exec: AsyncParsableCommand {
+    // Note on flag placement: --cpu-limit, --memory-limit, and
+    // --no-isolated must all come BEFORE rootfsPath, not after. The
+    // `arguments` field below uses .remaining parsing, meaning
+    // everything after binaryPath is treated as literal arguments to
+    // hand the job itself - including anything that looks like one of
+    // this command's own flags. This is the same convention tools like
+    // `env` and `cargo run --` use (wrapper flags first, then the target
+    // and its own arguments), and it was found the hard way: an early
+    // manual test placed --no-isolated after the positional arguments,
+    // where it was silently passed through to the job instead of being
+    // parsed by darwin-run at all.
     static let configuration = CommandConfiguration(
-        abstract: "Runs a binary from an unpacked bundle."
+        abstract: "Runs a binary from an unpacked bundle. Put --cpu-limit/--memory-limit/--no-isolated BEFORE the rootfs path, not after - anything after the binary path is passed through to the job itself."
     )
 
     @Argument(help: "Path to the unpacked bundle's rootfs (printed by `darwin-run pull`).")
@@ -160,6 +171,42 @@ struct Stop: AsyncParsableCommand {
         switch response {
         case .stopped(let jobID):
             print("stop signal sent to job \(jobID)")
+        case .error(let message):
+            print("error: \(message)")
+        default:
+            print("unexpected response from daemon: \(response)")
+        }
+    }
+}
+
+/// Starts streaming a running job's real memory/CPU telemetry to an
+/// OTLP collector, running until the job itself finishes.
+struct Stats: AsyncParsableCommand {
+    static let configuration = CommandConfiguration(
+        abstract: "Streams real memory/CPU telemetry for a running job to an OTLP collector."
+    )
+
+    @Argument(help: "The ID of the job to stream stats for.")
+    var jobID: String
+
+    @Option(
+        name: .customLong("stream-otel"),
+        help: "OTLP/HTTP+JSON collector endpoint, e.g. http://localhost:4318/v1/metrics."
+    )
+    var endpoint: String
+
+    /// Sends an IPCMessage.stats. The daemon replies as soon as it has
+    /// confirmed the job is running and started its background sampling
+    /// loop - not once any data has actually been exported. Streaming
+    /// only works for genuinely compiled job binaries; a job whose
+    /// binary was a shebang script will have its sampling loop give up
+    /// after a few failed attempts, logged on the daemon side (see
+    /// JobSigner and DEBUGGING_LOG.md #13).
+    func run() async throws {
+        let response = try await SocketClient.send(.stats(jobID: jobID, endpoint: endpoint))
+        switch response {
+        case .statsStarted(let jobID):
+            print("streaming stats for job \(jobID) to \(endpoint)")
         case .error(let message):
             print("error: \(message)")
         default:

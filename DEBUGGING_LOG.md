@@ -578,3 +578,61 @@ many things happening on the machine at once, that is completely normal
 outside of a quiet, empty test run. Running the whole suite together
 regularly, not just the one test I am currently working on, is what
 actually caught this.
+
+---
+
+## 15. My memory number was wrong the entire time, and my own test did not catch it (Stage 4)
+
+**What broke.** After wiring everything together, I finally ran the whole
+project the way it is actually meant to be used: pull a real program,
+run it, and watch its real memory usage stream out live. I gave it a
+program that deliberately grabs and fully uses about fifteen megabytes of
+memory, on purpose, specifically so the number reported back would be
+obviously meaningful. The number that came back was under one megabyte.
+Consistently, every single time, for as long as I let it run.
+
+**What caused it.** The specific piece of information I had been reading
+from the operating system this whole time, something with "resident
+memory size" written right in its own description, turns out to be a
+genuinely unreliable way to answer "how much memory is this program
+really using" on a modern Mac. It is an older measurement that does not
+account correctly for how the operating system compresses and shares
+memory pages behind the scenes today. Apple has a newer, different
+number specifically meant to replace it for exactly this purpose, one
+that is not the obvious first choice when just reading through the
+available fields, but is the one actually recommended, and the one tools
+like Activity Monitor genuinely rely on.
+
+To make sure sandboxing was not somehow the cause, I ran the exact same
+program two different ways, once sandboxed and once not, and compared
+them side by side. Both reported the same wrong, tiny number, which
+ruled that out cleanly and pointed at the actual measurement itself
+being the problem, not anything downstream of it.
+
+I also had to stop and understand something else along the way, one that
+sound reasonable at first: could the numbers just be fine, only measured
+too early, before the program had finished setting itself up? A single
+sample really can land before a program is fully ready, and I saw that
+happen too, once, before the numbers settled. But every sample after that
+first one stayed wrong for the old measurement, for minutes at a time,
+which ruled out simple timing as the explanation.
+
+**How I fixed it.** I switched to reading the newer, correct field
+instead of the old one. I re-ran the exact same real test afterward, not
+a new one, the same fifteen-megabyte program, the same live measurement
+setup, and this time it correctly reported just under sixteen megabytes,
+matching what was actually allocated almost exactly.
+
+**What to remember.** This is the one that concerns me most so far,
+because an earlier, narrower test I had already written and trusted did
+not catch it. That test also used the old, wrong field, and it also
+happened to pass, reporting a plausible-looking number for a smaller
+allocation in a simpler setup. A field that is subtly wrong can still
+occasionally produce a number that looks reasonable enough to slip past
+a loose check, especially one that only confirms a number is "big
+enough" rather than checking it against a precisely known, expected
+value. Running the real, complete version of a feature end to end, the
+way an actual person would eventually use it, and comparing the result
+against a number I can independently predict and check by hand, catches
+real mistakes that a narrower, more convenient test can still miss
+completely.

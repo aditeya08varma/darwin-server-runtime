@@ -62,8 +62,22 @@ public enum MachMetricsSampler {
         )
     }
 
-    /// Reads TASK_VM_INFO and returns just the resident_size field -
-    /// the task's actual physical memory footprint right now.
+    /// Reads TASK_VM_INFO and returns phys_footprint, not resident_size.
+    ///
+    /// The first version of this function read resident_size, which
+    /// seemed like the obvious field - its own comment says "resident
+    /// memory size (bytes)". Verified live against a real job that
+    /// allocated and touched 15MB, it reported under 1MB, consistently,
+    /// regardless of whether the job was sandboxed or not (ruling out
+    /// Seatbelt as the cause). resident_size is a legacy field with
+    /// known accuracy problems on modern macOS - it does not reliably
+    /// reflect a process's real memory use once the kernel's memory
+    /// compressor and shared-page accounting are involved. phys_footprint
+    /// is Apple's own newer, documented replacement for exactly this
+    /// question, and is what Activity Monitor and modern profiling tools
+    /// actually use. Confirmed by switching to it and re-running the
+    /// same live test: it reported the expected ~15MB. See
+    /// DEBUGGING_LOG.md for the full comparison.
     private static func readResidentSize(of task: task_t) throws -> UInt64 {
         var info = task_vm_info_data_t()
         var count = mach_msg_type_number_t(MemoryLayout<task_vm_info_data_t>.size / MemoryLayout<integer_t>.size)
@@ -76,7 +90,7 @@ public enum MachMetricsSampler {
         guard result == KERN_SUCCESS else {
             throw MachMetricsError.taskInfoFailed(kernReturn: result, flavor: "TASK_VM_INFO")
         }
-        return info.resident_size
+        return info.phys_footprint
     }
 
     /// Reads TASK_THREAD_TIMES_INFO and converts its seconds/microseconds
