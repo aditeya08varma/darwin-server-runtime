@@ -106,10 +106,10 @@ final class SocketServer {
 
     /// Decodes one complete frame as an IPCMessage, decides how to
     /// respond, and writes the framed IPCResponse back to the connection.
-    /// Only .ping is actually handled in Stage 1; every other message
-    /// kind gets an honest "not implemented yet" or "no such job" reply
-    /// rather than pretending to do something it can't do until later
-    /// stages wire up real image unpacking, sandboxing, and job tracking.
+    /// .ping and .pull are fully real as of Stage 2. .exec still gets an
+    /// honest "not implemented yet" reply, and .stop/.status honestly
+    /// report "no such job" for now, since no job can exist until Stage 3
+    /// wires up real process execution.
     private static func respond(to frame: Data, on connection: NWConnection, state: DaemonState) async {
         let response: IPCResponse
         do {
@@ -117,6 +117,8 @@ final class SocketServer {
             switch message {
             case .ping:
                 response = .pong
+            case .pull(let config):
+                response = BundlePuller.pull(config)
             case .exec:
                 response = .error(message: "exec is not implemented until Stage 3")
             case .stop(let jobID):

@@ -30,9 +30,10 @@ kernel telemetry APIs.
         RuntimeCore    ImageStore     Isolation       Telemetry
        (shared types)  (unpack +      (Seatbelt /     (Mach metrics,
                         verify)        POSIX jail)      OTel export)
-                              |
-                        CSystemBridge
-                  (libarchive, Mach headers, C interop)
+                         |     |
+                CSystemBridge  CArchive
+              (our own C glue, (libarchive systemLibrary
+               Mach headers)    target, Homebrew-backed)
 ```
 
 ## Status
@@ -53,17 +54,40 @@ lands.
   `CSystemBridge` into a real C function, proving Swift-to-C interop works
   end to end before any real libarchive or Mach kernel code is written.
 
-### Stage 1 — Core daemon & IPC control plane (not started)
+### Stage 1 — Core daemon & IPC control plane (done)
 
-`RuntimeCore`'s real `IPCMessage` protocol, the `NWListener`-based Unix
-socket server in `DarwinDaemon`, `OSLog`-based daemon observability, the
-`darwin-run ping`/`status` round trip, and the `launchd` LaunchAgent plist.
+- `RuntimeCore`'s real `IPCMessage`/`IPCResponse`/`ExecConfig` wire
+  protocol, newline-delimited JSON framing (`IPCFraming`, `LineFrameBuffer`),
+  verified with round-trip tests including split and concatenated frames.
+- An `NWListener`-based Unix domain socket server in `DarwinDaemon`,
+  `OSLog`-instrumented, handling `.ping`/`.pull`/`.exec`/`.stop`/`.status`
+  honestly (real work for the first two, honest "not implemented"/"no such
+  job" for the rest until Stages 2 and 3 land).
+- `darwin-run ping`/`status <id>` genuinely round-trip to the daemon over
+  the socket, including correct handling of the case where the daemon
+  isn't running at all (see `DEBUGGING_LOG.md` #4).
+- A `launchd` LaunchAgent plist, verified including a real kill-and-respawn
+  test proving `KeepAlive` actually restarts a crashed daemon.
 
-### Stage 2 — Image unpacking & verification (not started)
+### Stage 2 — Image unpacking & verification (done)
 
-libarchive bindings in `CSystemBridge`, tarball unpacking with a
-path-traversal guard, and Ed25519/SHA-256 signature verification via
-CryptoKit, wired up behind `darwin-run pull`.
+- `libarchive` wired in via a `systemLibrary` target (`CArchive`), not
+  folded into `CSystemBridge` - see `DEBUGGING_LOG.md` #5 and #6 for why,
+  and for a real gap that was found and then explicitly fixed (linking
+  against Homebrew's `libarchive` rather than macOS's own bundled copy).
+- `ImageArchive.unpack(tarball:into:)`: real tarball extraction via
+  `libarchive`'s read API, with a path-traversal guard as the
+  security-critical check, proven against both relative (`../`) and
+  absolute path attack variants - including confirming the escaped file
+  was never written to disk at all, not just that an error was thrown.
+- `TrustVerifier.verify(tarball:manifest:publicKey:)`: Ed25519/SHA-256
+  verification via `CryptoKit`, proven against a genuine forged-bundle
+  scenario (hash rewritten to match a swapped tarball, but signed with
+  the wrong key) to confirm the hash check and signature check each catch
+  something the other alone would miss.
+- `darwin-run pull <tarball> --verify-key <key>` wired end to end through
+  the daemon socket, verified against a real signed bundle built with the
+  actual `tar` command, not just a test fixture.
 
 ### Stage 3 — Process execution & Darwin sandboxing (not started)
 
@@ -105,6 +129,10 @@ swift test
 
 ## Requirements
 
-- macOS 13 or later
-- Xcode Command Line Tools (`xcode-select -p` should print a path)
+- macOS 13 or later, Apple Silicon (some paths in `Package.swift` and the
+  `CArchive` module map assume the standard `/opt/homebrew` Homebrew prefix)
+- Full Xcode installed, not just the Command Line Tools (`swift test`
+  needs `XCTest.framework`, which only ships inside Xcode.app - see
+  `DEBUGGING_LOG.md` #1)
 - Swift 5.9+ toolchain
+- Homebrew's `libarchive`: `brew install libarchive`

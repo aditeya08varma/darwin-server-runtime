@@ -49,6 +49,31 @@ public struct ExecConfig: Codable, Sendable, Equatable {
     }
 }
 
+/// A request to verify and unpack a local tarball, sent by `darwin-run
+/// pull`. All three paths are filesystem paths on the machine both the
+/// CLI and the daemon share (this is a local dev tool, not a network
+/// upload), and must already be absolute by the time this is sent: the
+/// CLI resolves them against its own working directory before sending,
+/// since the daemon's working directory (set by launchd) has no relation
+/// to wherever the user actually ran darwin-run from.
+public struct PullConfig: Codable, Sendable, Equatable {
+    /// Absolute path to the tarball to verify and unpack.
+    public var tarballPath: String
+
+    /// Absolute path to the tarball's signed manifest JSON file.
+    public var manifestPath: String
+
+    /// Absolute path to the base64-encoded Ed25519 public key file to
+    /// verify the manifest's signature against.
+    public var verifyKeyPath: String
+
+    public init(tarballPath: String, manifestPath: String, verifyKeyPath: String) {
+        self.tarballPath = tarballPath
+        self.manifestPath = manifestPath
+        self.verifyKeyPath = verifyKeyPath
+    }
+}
+
 /// Every kind of request the CLI can send to the daemon over the socket.
 /// The CLI encodes one of these cases to JSON and sends it; the daemon
 /// decodes the same enum and switches on which case arrived to decide what
@@ -57,6 +82,9 @@ public struct ExecConfig: Codable, Sendable, Equatable {
 public enum IPCMessage: Codable, Sendable, Equatable {
     /// A liveness check with no side effects. The daemon should reply .pong.
     case ping
+
+    /// A request to verify and unpack a local tarball. See PullConfig.
+    case pull(PullConfig)
 
     /// A request to start running the workload described by the given config.
     case exec(ExecConfig)
@@ -72,6 +100,12 @@ public enum IPCMessage: Codable, Sendable, Equatable {
 public enum IPCResponse: Codable, Sendable, Equatable {
     /// Sent back for .ping, confirming the daemon is alive and listening.
     case pong
+
+    /// Sent back for .pull once the tarball has been verified against its
+    /// manifest and successfully unpacked. bundleID identifies the bundle
+    /// for future use (Stage 3's .exec will reference bundles by this ID);
+    /// rootfsPath is where its contents actually landed on disk.
+    case pulled(bundleID: String, rootfsPath: String)
 
     /// Sent back for .exec once the daemon has accepted the job and
     /// assigned it an ID the caller can use in later .stop/.status requests.
