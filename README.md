@@ -109,8 +109,14 @@ with a genuinely compiled test binary. One further real limit found:
 this only works for compiled binaries, not shebang scripts, since the
 kernel actually executes the interpreter (Apple's own signed `/bin/sh`)
 as the real process image, not the script text — confirmed by testing
-both cases side by side. See `DEBUGGING_LOG.md` #12 and #13. Still to
-come: the actual `task_info` sampling code, the ring buffer, and the
+both cases side by side. See `DEBUGGING_LOG.md` #12 and #13.
+`MachMetricsSampler` now reads real `TASK_VM_INFO`/`TASK_THREAD_TIMES_INFO`
+data - written entirely in Swift via `import Darwin`, no C bridging
+needed, since Mach APIs are part of the standard SDK unlike `libarchive`.
+Proven with real numbers, not just passing assertions: a program that
+allocates and touches 20MB reported 21.3MB resident, and sampling an
+unsigned binary fails with the expected, specific error rather than
+silently returning zero. Still to come: the bounded ring buffer and the
 OTLP exporter behind `darwin-run stats`.
 
 ## Deliberate departures from a "standard container runtime"

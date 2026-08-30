@@ -88,6 +88,6 @@ let package = Package(
                 .unsafeFlags(["-L/opt/homebrew/opt/libarchive/lib"])
             ]
         ),
-        .testTarget(name: "SoakTests", dependencies: ["Telemetry"])
+        .testTarget(name: "SoakTests", dependencies: ["Telemetry", "Isolation"])
     ]
 )
