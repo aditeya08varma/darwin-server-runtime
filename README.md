@@ -116,8 +116,12 @@ needed, since Mach APIs are part of the standard SDK unlike `libarchive`.
 Proven with real numbers, not just passing assertions: a program that
 allocates and touches 20MB reported 21.3MB resident, and sampling an
 unsigned binary fails with the expected, specific error rather than
-silently returning zero. Still to come: the bounded ring buffer and the
-OTLP exporter behind `darwin-run stats`.
+silently returning zero. `MetricsRingBuffer` is a bounded, actor-guarded
+queue between the sampler and the exporter - deliberately *not* called
+"lock-free" (a true lock-free SPSC ring buffer needs `ManagedBuffer` and
+manual atomics, more machinery than this project's sampling rate needs),
+proven safe under 100 genuinely concurrent appends with zero loss or
+corruption. Still to come: the OTLP exporter behind `darwin-run stats`.
 
 ## Deliberate departures from a "standard container runtime"
 
