@@ -345,12 +345,21 @@ final class SandboxSecurityTests: XCTestCase {
     /// should stay simple, with the binary launched directly.
     func testNoResourceLimitsMeansNoShellWrapping() throws {
         let rootfs = workDirectory.appendingPathComponent("rootfs")
-        let scriptURL = try writeExecutableScript("#!/bin/sh\necho plain\n", at: "app.sh", in: rootfs)
+        _ = try writeExecutableScript("#!/bin/sh\necho plain\n", at: "app.sh", in: rootfs)
 
         let config = ExecConfig(binaryPath: "/app.sh", rootfsPath: rootfs.path, cpuLimit: nil, memoryLimitMB: nil)
         let process = try POSIXIsolationEngine().spawn(config, rootfs: rootfs)
 
-        XCTAssertEqual(process.executableURL, scriptURL)
+        // Compare the last path component and confirm it is not /bin/sh,
+        // rather than exact URL equality against a path built without
+        // going through RealPath's realpath()-based canonicalization -
+        // process.executableURL is now the true canonical path (see
+        // RealPath.swift), which can legitimately differ in string form
+        // (e.g. /private/var/folders/... vs /var/folders/...) from a
+        // path built with plain appendingPathComponent, without that
+        // meaning anything went wrong.
+        XCTAssertEqual(process.executableURL?.lastPathComponent, "app.sh")
+        XCTAssertNotEqual(process.executableURL?.lastPathComponent, "sh")
     }
 
     /// A memory limit request must not crash or throw - it should still
@@ -372,5 +381,91 @@ final class SandboxSecurityTests: XCTestCase {
         let output = String(data: outputPipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8)
         XCTAssertEqual(output, "still-runs\n")
         XCTAssertEqual(process.terminationStatus, 0)
+    }
+
+    /// The core positive case for SeatbeltIsolationEngine: a real script
+    /// runs under sandbox-exec and its real stdout is captured through an
+    /// anonymous Pipe. This specifically settles a question that could
+    /// not be tested from a plain shell command while building this
+    /// profile: whether a sandboxed process can write to an inherited,
+    /// path-less pipe file descriptor without an explicit file-write*
+    /// rule for it. It can - Seatbelt's file-read*/file-write* rules
+    /// gate path-based opens, not writes to an fd the process already
+    /// had inherited across fork/exec.
+    func testSeatbeltEngineRunsRealScriptAndCapturesOutputThroughAPipe() throws {
+        let rootfs = workDirectory.appendingPathComponent("rootfs")
+        _ = try writeExecutableScript(
+            "#!/bin/sh\necho hello-from-the-real-sandbox\n",
+            at: "app.sh",
+            in: rootfs
+        )
+
+        let config = ExecConfig(binaryPath: "/app.sh", rootfsPath: rootfs.path)
+        let process = try SeatbeltIsolationEngine().spawn(config, rootfs: rootfs)
+
+        let outputPipe = Pipe()
+        process.standardOutput = outputPipe
+        try process.run()
+        process.waitUntilExit()
+
+        let output = String(data: outputPipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8)
+        XCTAssertEqual(output, "hello-from-the-real-sandbox\n")
+        XCTAssertEqual(process.terminationStatus, 0)
+    }
+
+    /// The real differentiator between this backend and
+    /// POSIXIsolationEngine: a script that tries to write a file entirely
+    /// outside its rootfs must be blocked by the kernel while it is
+    /// running, not merely have its starting binary path checked once.
+    /// POSIXIsolationEngine cannot stop this at all (see the earlier
+    /// conversation on what is lost when falling back to it); a real
+    /// Seatbelt profile must.
+    func testSeatbeltEngineBlocksWritesOutsideRootfsWhileRunning() throws {
+        let rootfs = workDirectory.appendingPathComponent("rootfs")
+        let escapeTarget = workDirectory.appendingPathComponent("escaped-write-attempt.txt")
+        _ = try writeExecutableScript(
+            """
+            #!/bin/sh
+            if echo leaked > "$1" 2>/dev/null; then
+                echo ESCAPE_SUCCEEDED
+            else
+                echo ESCAPE_BLOCKED
+            fi
+            """,
+            at: "probe.sh",
+            in: rootfs
+        )
+
+        let config = ExecConfig(binaryPath: "/probe.sh", arguments: [escapeTarget.path], rootfsPath: rootfs.path)
+        let process = try SeatbeltIsolationEngine().spawn(config, rootfs: rootfs)
+
+        let outputPipe = Pipe()
+        process.standardOutput = outputPipe
+        try process.run()
+        process.waitUntilExit()
+
+        let output = String(data: outputPipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8)
+        XCTAssertEqual(output, "ESCAPE_BLOCKED\n")
+        XCTAssertFalse(
+            FileManager.default.fileExists(atPath: escapeTarget.path),
+            "the kernel must have blocked this write; POSIXIsolationEngine could not have stopped it"
+        )
+    }
+
+    /// Same path-jail check as POSIXIsolationEngine, since both backends
+    /// share BinaryPathResolver - confirms the shared resolver actually
+    /// gets used here too, not bypassed.
+    func testSeatbeltEngineRejectsPathTraversalBinaryPath() throws {
+        let rootfs = workDirectory.appendingPathComponent("rootfs")
+        try FileManager.default.createDirectory(at: rootfs, withIntermediateDirectories: true)
+
+        let config = ExecConfig(binaryPath: "../../../../bin/sh", rootfsPath: rootfs.path)
+
+        XCTAssertThrowsError(try SeatbeltIsolationEngine().spawn(config, rootfs: rootfs)) { error in
+            guard case IsolationError.binaryEscapesRootfs = error else {
+                XCTFail("expected binaryEscapesRootfs, got \(error)")
+                return
+            }
+        }
     }
 }

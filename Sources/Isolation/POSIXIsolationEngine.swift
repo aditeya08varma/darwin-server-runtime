@@ -18,7 +18,7 @@ public final class POSIXIsolationEngine: ProcessIsolationEngine {
     /// requested, are applied via ResourceLimits.apply (see that file for
     /// why memory limits cannot be enforced the same way on macOS).
     public func spawn(_ config: ExecConfig, rootfs: URL) throws -> Process {
-        let binaryURL = try resolveBinaryPath(config.binaryPath, within: rootfs)
+        let binaryURL = try BinaryPathResolver.resolve(config.binaryPath, within: rootfs)
 
         let process = Process()
         process.executableURL = binaryURL
@@ -26,40 +26,5 @@ public final class POSIXIsolationEngine: ProcessIsolationEngine {
         process.currentDirectoryURL = rootfs
         ResourceLimits.apply(config, to: process)
         return process
-    }
-
-    /// Resolves `binaryPath` as if `rootfs` were the filesystem root (so
-    /// a config value like "/bin/echo" means "bin/echo inside rootfs",
-    /// not "the real /bin/echo on this Mac"), then confirms the resolved
-    /// path genuinely stays inside rootfs using resolvingSymlinksInPath -
-    /// this is the same defense-in-depth reasoning as ImageArchive's
-    /// path-traversal guard, checked again here at execution time since a
-    /// rootfs could, in principle, be modified between when it was
-    /// unpacked and when it's actually run.
-    private func resolveBinaryPath(_ binaryPath: String, within rootfs: URL) throws -> URL {
-        let trimmedPath = binaryPath.hasPrefix("/") ? String(binaryPath.dropFirst()) : binaryPath
-        do {
-            try PathSafety.validateRelativePath(trimmedPath)
-        } catch {
-            // Translated to IsolationError so callers only ever need to
-            // catch one error type from this module, the same pattern
-            // ImageArchive uses for the same underlying check.
-            throw IsolationError.binaryEscapesRootfs(binaryPath)
-        }
-
-        let rootfsResolved = rootfs.resolvingSymlinksInPath().standardizedFileURL
-        let candidate = rootfsResolved
-            .appendingPathComponent(trimmedPath)
-            .resolvingSymlinksInPath()
-            .standardizedFileURL
-
-        let rootfsPrefix = rootfsResolved.path.hasSuffix("/") ? rootfsResolved.path : rootfsResolved.path + "/"
-        guard candidate.path.hasPrefix(rootfsPrefix) else {
-            throw IsolationError.binaryEscapesRootfs(binaryPath)
-        }
-        guard FileManager.default.isExecutableFile(atPath: candidate.path) else {
-            throw IsolationError.binaryNotFound(binaryPath)
-        }
-        return candidate
     }
 }

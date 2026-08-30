@@ -10,6 +10,7 @@ import RuntimeCore
 public enum IsolationError: Error, CustomStringConvertible {
     case binaryEscapesRootfs(String)
     case binaryNotFound(String)
+    case profileWriteFailed(String)
 
     public var description: String {
         switch self {
@@ -17,6 +18,8 @@ public enum IsolationError: Error, CustomStringConvertible {
             return "binary path escapes the rootfs: \(path)"
         case .binaryNotFound(let path):
             return "binary not found or not executable: \(path)"
+        case .profileWriteFailed(let message):
+            return "could not write sandbox profile: \(message)"
         }
     }
 }

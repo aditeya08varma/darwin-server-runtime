@@ -332,3 +332,61 @@ real answer was closer to "does nothing at all right now." Testing an
 assumption directly, the same way I tested the earlier one about which
 copy of libarchive was really running, is what caught the gap between
 what I had written down and what was actually true.
+
+---
+
+## 10. My real sandbox profile kept rejecting things that looked completely fine (Stage 3)
+
+**What broke.** I wrote the actual Seatbelt sandboxing code and gave it
+its first real test: run a tiny script inside a locked-down folder. It
+failed immediately with "Operation not permitted," even though I had
+already worked out, by hand, in the terminal, a version of this exact
+profile that worked correctly.
+
+**What caused it.** This turned out to be a genuinely sneaky problem, and
+it took real digging to find. On macOS, a folder like `/tmp` is not
+actually a real folder at all. It is a shortcut that quietly points to a
+different real folder, `/private/tmp`. Most of the time this distinction
+never matters, because the system quietly follows the shortcut for you
+without telling you.
+
+My own program uses a well known, standard tool to clean up file paths
+before using them. I assumed that tool would follow shortcuts like this
+one all the way through to the real underlying folder, the same way the
+operating system itself does. It turns out that tool deliberately does
+not do that, specifically for a small handful of well known folders like
+`/tmp`. It leaves the shortcut exactly as it found it, on purpose, for
+compatibility reasons Apple built in a long time ago.
+
+That difference does not matter for most of what I have built so far.
+But it mattered enormously here, because the sandbox rule I was writing
+gets checked by the operating system itself, using the real, fully
+followed-through folder name, not the shortcut name my own program was
+still using. My rule and the operating system's own check were quietly
+talking about two different looking versions of the exact same folder,
+and so nothing matched, and everything was denied.
+
+I confirmed this precisely by writing the exact same folder path two
+different ways side by side and comparing the results directly, rather
+than continuing to guess. One version, using my program's usual tool,
+kept the shortcut form. The other, using a lower level system tool that
+talks to the operating system more directly, correctly returned the real
+underlying folder name. That side-by-side comparison is what made the
+mismatch obvious and undeniable.
+
+**How I fixed it.** I stopped relying on my program's usual, higher level
+path-cleanup tool for this specific purpose. Instead, I built a small
+dedicated helper that asks the operating system directly for a folder's
+true, fully resolved name, and I made sure both the sandbox rule and the
+program actually being run agree on that same true name, every time.
+
+**What to remember.** Two tools can both claim to do the same basic job,
+"give me the real version of this file path," and still genuinely
+disagree with each other in specific, easy-to-miss cases. That gap
+usually will not matter. But the moment a path is being checked by
+something outside my own program, like the operating system's own
+security rules here, the two versions absolutely have to match exactly,
+or the whole check silently falls apart. When I am not sure two tools
+truly agree, comparing their actual output side by side, directly, is
+far more reliable than trusting that they must, because they sound like
+they should.

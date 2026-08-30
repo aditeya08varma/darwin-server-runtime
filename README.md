@@ -89,11 +89,29 @@ lands.
   the daemon socket, verified against a real signed bundle built with the
   actual `tar` command, not just a test fixture.
 
-### Stage 3 — Process execution & Darwin sandboxing (not started)
+### Stage 3 — Process execution & Darwin sandboxing (in progress)
 
-The `ProcessIsolationEngine` abstraction, a `sandbox-exec`-based Seatbelt
-backend with dynamically generated SBPL profiles, a POSIX fallback backend,
-and process lifecycle supervision, wired up behind `darwin-run exec`.
+- `ProcessIsolationEngine` protocol plus `POSIXIsolationEngine` (path-jail
+  only, no kernel enforcement past the initial check) and
+  `SeatbeltIsolationEngine` (a real, dynamically generated SBPL profile
+  per job, enforced continuously by the kernel). The Seatbelt backend's
+  profile was worked out by iterating directly against real
+  `sandbox-exec` invocations and reading exact denial reasons out of the
+  unified log, not written from documentation alone - Apple doesn't
+  publish an official SBPL reference.
+- Real, live proof, not just passing tests by construction: a spin-loop
+  process actually killed by the kernel once its CPU limit ran out
+  (`SIGXCPU`), and a sandboxed script's attempt to write a file *outside*
+  its rootfs actually blocked by the kernel while running - something
+  `POSIXIsolationEngine` cannot stop at all, which is the real
+  differentiator the two backends' tests demonstrate side by side.
+- A subtle, genuinely tricky bug found and fixed along the way: `/tmp`
+  (and `/var`, `/etc`) are symlinks to `/private/...` on macOS, and
+  Foundation's `resolvingSymlinksInPath()` deliberately does not resolve
+  them, while the kernel's own Seatbelt enforcement checks against the
+  fully resolved path regardless. See `DEBUGGING_LOG.md` #10.
+- Still to come: `ProcessSupervisor` (stdout/stderr capture, lifecycle,
+  the `.exec`/`.stop`/`.status` IPC wiring) and `darwin-run exec` itself.
 
 ### Stage 4 — Telemetry & OpenTelemetry exporter (not started)
 
