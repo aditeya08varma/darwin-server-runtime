@@ -294,3 +294,41 @@ function. Trying to write the very first real test for a new piece of
 code, right after writing it, is often what surfaces a bad interface
 decision like this quickly, before anything else gets built on top of it
 and makes the fix more expensive later.
+
+---
+
+## 9. Memory limits cannot actually be set on macOS at all (Stage 3)
+
+**What broke.** Nothing broke yet, because I checked before writing the
+code instead of after. I was about to implement `--memory-limit` the same
+way I planned to implement `--cpu-limit`, using the shell's own `ulimit`
+command, and I decided to test it by hand on my own machine first rather
+than just assume it would work the same way.
+
+**What caused it.** It turns out macOS simply will not let a normal
+program lower its own memory-related limits at all, no matter how you ask
+it. I checked this three separate ways, on purpose, so I could not talk
+myself into believing it was just one tool being fussy: asking the shell
+directly with `ulimit -v`, asking it a different way with `ulimit -m`,
+and finally bypassing the shell completely and asking the operating
+system directly through a small Python script. All three were refused,
+every time, with no memory limit ever actually being set. The CPU time
+limit, by contrast, worked correctly every single time I tried it, and I
+could prove it worked by watching a runaway program actually get killed
+by the operating system once its time ran out.
+
+**How I fixed it.** I did not try to force a fix that does not exist. I
+implemented the CPU limit for real, since it genuinely works. For the
+memory limit, I made the honest choice: the program still runs the
+requested job normally, but instead of silently pretending a memory limit
+was applied when it was not, it writes a clear warning explaining that
+this specific limit could not be enforced on this machine.
+
+**What to remember.** This is the second time in this project that
+something written in an earlier note ("memory limits are best effort")
+turned out to undersell the real problem once I actually tested it by
+hand. "Best effort" suggested it does something, just not perfectly. The
+real answer was closer to "does nothing at all right now." Testing an
+assumption directly, the same way I tested the earlier one about which
+copy of libarchive was really running, is what caught the gap between
+what I had written down and what was actually true.

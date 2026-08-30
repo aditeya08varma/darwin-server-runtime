@@ -315,4 +315,62 @@ final class SandboxSecurityTests: XCTestCase {
             }
         }
     }
+
+    /// The real, load-bearing claim behind ResourceLimits: a process that
+    /// spins forever must actually be killed by the kernel once its CPU
+    /// time limit is exceeded, not merely have a limit "set" that does
+    /// nothing. SIGXCPU is signal 24 on Darwin, and a process killed by a
+    /// signal reports terminationStatus equal to that signal number with
+    /// terminationReason .uncaughtSignal.
+    func testCPULimitIsGenuinelyEnforcedByTheKernel() throws {
+        let rootfs = workDirectory.appendingPathComponent("rootfs")
+        _ = try writeExecutableScript(
+            "#!/bin/sh\nwhile true; do :; done\n",
+            at: "spin.sh",
+            in: rootfs
+        )
+
+        let config = ExecConfig(binaryPath: "/spin.sh", rootfsPath: rootfs.path, cpuLimit: 1)
+        let process = try POSIXIsolationEngine().spawn(config, rootfs: rootfs)
+
+        try process.run()
+        process.waitUntilExit()
+
+        XCTAssertEqual(process.terminationReason, .uncaughtSignal)
+        XCTAssertEqual(process.terminationStatus, 24, "expected SIGXCPU (24), the kernel's real CPU-limit-exceeded signal")
+    }
+
+    /// When no limits are requested at all, spawn() should not route the
+    /// process through the /bin/sh wrapper - the simple, common case
+    /// should stay simple, with the binary launched directly.
+    func testNoResourceLimitsMeansNoShellWrapping() throws {
+        let rootfs = workDirectory.appendingPathComponent("rootfs")
+        let scriptURL = try writeExecutableScript("#!/bin/sh\necho plain\n", at: "app.sh", in: rootfs)
+
+        let config = ExecConfig(binaryPath: "/app.sh", rootfsPath: rootfs.path, cpuLimit: nil, memoryLimitMB: nil)
+        let process = try POSIXIsolationEngine().spawn(config, rootfs: rootfs)
+
+        XCTAssertEqual(process.executableURL, scriptURL)
+    }
+
+    /// A memory limit request must not crash or throw - it should still
+    /// run the process, just without the (unenforceable on this
+    /// platform) memory cap actually applied. See ResourceLimits.swift
+    /// for why this is a deliberate, documented gap rather than a bug.
+    func testMemoryLimitRequestDoesNotPreventExecution() throws {
+        let rootfs = workDirectory.appendingPathComponent("rootfs")
+        _ = try writeExecutableScript("#!/bin/sh\necho still-runs\n", at: "app.sh", in: rootfs)
+
+        let config = ExecConfig(binaryPath: "/app.sh", rootfsPath: rootfs.path, memoryLimitMB: 64)
+        let process = try POSIXIsolationEngine().spawn(config, rootfs: rootfs)
+
+        let outputPipe = Pipe()
+        process.standardOutput = outputPipe
+        try process.run()
+        process.waitUntilExit()
+
+        let output = String(data: outputPipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8)
+        XCTAssertEqual(output, "still-runs\n")
+        XCTAssertEqual(process.terminationStatus, 0)
+    }
 }

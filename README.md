@@ -113,9 +113,19 @@ up behind `darwin-run stats`.
   on modern macOS unless the caller holds a debugging entitlement. Since the
   daemon always spawns its own children, this is achievable without special
   entitlements, but it does not generalize to arbitrary external PIDs.
-- **Memory limits are best-effort, not a hard ceiling.** macOS has no
-  cgroups-style hard memory cap for arbitrary processes; `--memory-limit`
-  maps to `RLIMIT_AS`, a soft constraint, not a guarantee.
+- **CPU limits are real; memory limits are not enforced at all yet.**
+  `--cpu-limit` maps to `ulimit -t` and was confirmed genuinely
+  kernel-enforced (a spin-loop process was actually killed with
+  `SIGXCPU`). Memory limits are a different story: setting `RLIMIT_AS`,
+  `RLIMIT_RSS`, or `RLIMIT_DATA` on macOS was tested three independent
+  ways - bash's `ulimit -v`, bash's `ulimit -m`, and a raw `setrlimit()`
+  syscall - and all three refuse to lower these limits at all. This isn't
+  a "soft constraint," it's currently unenforceable through this
+  mechanism; `--memory-limit` is accepted and logged as a warning, not
+  silently pretended to work. Real per-process memory containment on
+  macOS would need active monitoring via Mach's `task_info`, killing the
+  process if it exceeds the limit - that's Stage 4 territory, not solved
+  yet. See `DEBUGGING_LOG.md` #9.
 - **Performance numbers are measured, not asserted.** Cold-start latency,
   memory overhead, and telemetry CPU cost are tracked as reproducible scripts
   in `benchmarks/` and reported here only once actually measured.

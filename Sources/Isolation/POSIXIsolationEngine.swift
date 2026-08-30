@@ -14,11 +14,9 @@ public final class POSIXIsolationEngine: ProcessIsolationEngine {
     /// Resolves config.binaryPath against rootfs, confirms it actually
     /// stays inside rootfs, and returns a Process configured to run it
     /// with rootfs as its working directory - not yet launched, so the
-    /// caller can still attach stdout/stderr pipes first. Resource limits
-    /// (cpu/memory) are intentionally not applied yet; that's a separate
-    /// component, since Foundation's Process has no built-in hook for
-    /// setting rlimits on the child before it execs, and solving that
-    /// cleanly is a bigger question than path resolution.
+    /// caller can still attach stdout/stderr pipes first. CPU limits, if
+    /// requested, are applied via ResourceLimits.apply (see that file for
+    /// why memory limits cannot be enforced the same way on macOS).
     public func spawn(_ config: ExecConfig, rootfs: URL) throws -> Process {
         let binaryURL = try resolveBinaryPath(config.binaryPath, within: rootfs)
 
@@ -26,6 +24,7 @@ public final class POSIXIsolationEngine: ProcessIsolationEngine {
         process.executableURL = binaryURL
         process.arguments = config.arguments
         process.currentDirectoryURL = rootfs
+        ResourceLimits.apply(config, to: process)
         return process
     }
 
