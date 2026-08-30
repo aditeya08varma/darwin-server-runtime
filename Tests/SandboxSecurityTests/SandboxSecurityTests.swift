@@ -3,6 +3,7 @@
 // Isolation-side tests; ImageArchive's real unpacking tests are here now.
 import XCTest
 import CryptoKit
+import RuntimeCore
 @testable import ImageStore
 @testable import Isolation
 
@@ -209,5 +210,109 @@ final class SandboxSecurityTests: XCTestCase {
         let loadedKey = try TrustVerifier.loadPublicKey(from: keyURL)
 
         XCTAssertEqual(loadedKey.rawRepresentation, originalKey.rawRepresentation)
+    }
+
+    /// Writes a small, real, executable shell script into `directory` at
+    /// `relativePath` and returns it. Used to give POSIXIsolationEngine a
+    /// genuine binary to run, rather than mocking process execution.
+    private func writeExecutableScript(_ contents: String, at relativePath: String, in directory: URL) throws -> URL {
+        let scriptURL = directory.appendingPathComponent(relativePath)
+        try FileManager.default.createDirectory(
+            at: scriptURL.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        try contents.write(to: scriptURL, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: scriptURL.path)
+        return scriptURL
+    }
+
+    /// The core positive case for POSIXIsolationEngine: a real script
+    /// inside the rootfs actually runs, and its real stdout is captured
+    /// correctly. This proves spawn() returns a Process the caller can
+    /// still attach a pipe to before launching, not one already running.
+    func testPOSIXEngineRunsRealScriptAndCapturesOutput() throws {
+        let rootfs = workDirectory.appendingPathComponent("rootfs")
+        _ = try writeExecutableScript(
+            "#!/bin/sh\necho hello-from-sandboxed-binary\n",
+            at: "app.sh",
+            in: rootfs
+        )
+
+        let config = ExecConfig(binaryPath: "/app.sh", rootfsPath: rootfs.path)
+        let process = try POSIXIsolationEngine().spawn(config, rootfs: rootfs)
+
+        let outputPipe = Pipe()
+        process.standardOutput = outputPipe
+        try process.run()
+        process.waitUntilExit()
+
+        let outputData = outputPipe.fileHandleForReading.readDataToEndOfFile()
+        let output = String(data: outputData, encoding: .utf8)
+        XCTAssertEqual(output, "hello-from-sandboxed-binary\n")
+        XCTAssertEqual(process.terminationStatus, 0)
+    }
+
+    /// A binary path using ".." to walk outside the rootfs must be
+    /// rejected before any process is even configured, the same
+    /// component-based check ImageArchive uses for tarball entries.
+    func testPOSIXEngineRejectsPathTraversalBinaryPath() throws {
+        let rootfs = workDirectory.appendingPathComponent("rootfs")
+        try FileManager.default.createDirectory(at: rootfs, withIntermediateDirectories: true)
+
+        let config = ExecConfig(binaryPath: "../../../../bin/sh", rootfsPath: rootfs.path)
+
+        XCTAssertThrowsError(try POSIXIsolationEngine().spawn(config, rootfs: rootfs)) { error in
+            guard case IsolationError.binaryEscapesRootfs = error else {
+                XCTFail("expected binaryEscapesRootfs, got \(error)")
+                return
+            }
+        }
+    }
+
+    /// The real escape attempt: a symlink planted inside the rootfs that
+    /// points at a script living genuinely outside of it. If
+    /// resolveBinaryPath only checked the raw, unresolved string, this
+    /// would incorrectly appear to be a safe, in-rootfs path. Because it
+    /// resolves symlinks before checking the rootfs prefix, this must
+    /// still be rejected.
+    func testPOSIXEngineRejectsSymlinkEscapingRootfs() throws {
+        let rootfs = workDirectory.appendingPathComponent("rootfs")
+        try FileManager.default.createDirectory(at: rootfs, withIntermediateDirectories: true)
+
+        let outsideScript = try writeExecutableScript(
+            "#!/bin/sh\necho this-should-never-run\n",
+            at: "outside-script.sh",
+            in: workDirectory
+        )
+
+        let symlinkPath = rootfs.appendingPathComponent("evil-link")
+        try FileManager.default.createSymbolicLink(at: symlinkPath, withDestinationURL: outsideScript)
+
+        let config = ExecConfig(binaryPath: "/evil-link", rootfsPath: rootfs.path)
+
+        XCTAssertThrowsError(try POSIXIsolationEngine().spawn(config, rootfs: rootfs)) { error in
+            guard case IsolationError.binaryEscapesRootfs = error else {
+                XCTFail("expected binaryEscapesRootfs, got \(error)")
+                return
+            }
+        }
+    }
+
+    /// A binaryPath that simply does not exist inside the rootfs (no
+    /// traversal attempt involved, just a typo or a missing file) should
+    /// fail with a distinct, honest error rather than being confused with
+    /// an escape attempt.
+    func testPOSIXEngineRejectsMissingBinary() throws {
+        let rootfs = workDirectory.appendingPathComponent("rootfs")
+        try FileManager.default.createDirectory(at: rootfs, withIntermediateDirectories: true)
+
+        let config = ExecConfig(binaryPath: "/does-not-exist", rootfsPath: rootfs.path)
+
+        XCTAssertThrowsError(try POSIXIsolationEngine().spawn(config, rootfs: rootfs)) { error in
+            guard case IsolationError.binaryNotFound = error else {
+                XCTFail("expected binaryNotFound, got \(error)")
+                return
+            }
+        }
     }
 }

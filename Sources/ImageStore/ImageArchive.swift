@@ -1,10 +1,13 @@
 // Unpacks a tarball (.tar, .tar.gz, and anything else libarchive can read)
 // into a destination directory, using libarchive's own read API through
 // CArchive. The one line in this file that actually matters for security
-// is the path safety check in validateSafePath: everything else here is
-// just plumbing to drive libarchive correctly.
+// is the path safety check, delegated to RuntimeCore.PathSafety (shared
+// with Isolation's rootfs path resolution - see that file's comment for
+// why this check lives in one shared place rather than two copies).
+// Everything else here is just plumbing to drive libarchive correctly.
 import Foundation
 import CArchive
+import RuntimeCore
 
 /// Errors that can happen while unpacking a tarball.
 public enum ImageArchiveError: Error, CustomStringConvertible {
@@ -97,18 +100,14 @@ public enum ImageArchive {
     }
 
     /// Rejects any entry path that could write outside of the destination
-    /// directory: an empty path, an absolute path (starting with "/"), or
-    /// a path containing a ".." component. Checking by path component
-    /// (splitting on "/") rather than checking whether the string contains
-    /// ".." anywhere is what makes this correct: it rejects the real
-    /// attack ("../../etc/passwd") without also rejecting a legitimately
-    /// named file like "foo..bar.txt", which merely contains the two
-    /// characters ".." without them being an actual path component.
+    /// directory, delegating the actual check to the shared
+    /// PathSafety.validateRelativePath and translating its error into
+    /// ImageArchiveError.unsafeEntryPath, so callers of this module keep
+    /// seeing the same error type as before this was extracted.
     private static func validateSafePath(_ path: String) throws {
-        if path.isEmpty || path.hasPrefix("/") {
-            throw ImageArchiveError.unsafeEntryPath(path)
-        }
-        if path.split(separator: "/").contains("..") {
+        do {
+            try PathSafety.validateRelativePath(path)
+        } catch {
             throw ImageArchiveError.unsafeEntryPath(path)
         }
     }

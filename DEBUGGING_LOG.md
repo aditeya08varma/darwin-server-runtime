@@ -259,3 +259,38 @@ specific and less forgiving than they first appear. In both cases here,
 the Swift compiler's own error message told me exactly what was wrong and
 exactly what to do instead. Reading that message carefully was faster than
 trying to guess the right fix from memory.
+
+---
+
+## 8. I designed spawn() to start the process itself, which left no room to capture its output (Stage 3)
+
+**What broke.** Nothing crashed, and no test even failed. While writing
+the very first test for POSIXIsolationEngine, I went to capture a
+process's real output and realized there was no way to do it with the
+function I had just written. My spawn() function both configured the
+process and immediately launched it. I planned to write a test that would
+attach a pipe to the process afterward and read its output, but by the
+time spawn() returned, the process had already started running with no
+pipe attached to catch anything it printed. There was no window left to
+attach one.
+
+**What caused it.** Foundation's `Process` type requires you to attach
+its stdout and stderr pipes before calling its own `run()` method, not
+after. I had written spawn() to call `run()` internally, as the very last
+step, which felt natural at the time since it seemed like spawning should
+mean "make it run." I had not yet thought through who is actually
+responsible for wiring up a process's output, which turned out to be a
+separate concern I had not built yet.
+
+**How I fixed it.** I removed the internal `run()` call entirely.
+spawn() now only validates the path and configures the Process object,
+then hands it back still unlaunched. Whoever actually starts it, a test
+today, and a proper job supervisor in the next component, gets a chance
+to attach pipes first and decide when to actually launch it.
+
+**What to remember.** This one was not a bug I had to chase down; it was
+a shape problem I noticed the moment I tried to actually use my own
+function. Trying to write the very first real test for a new piece of
+code, right after writing it, is often what surfaces a bad interface
+decision like this quickly, before anything else gets built on top of it
+and makes the fix more expensive later.
