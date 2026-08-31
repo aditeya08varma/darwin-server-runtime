@@ -178,6 +178,40 @@ counted rather than benchmarking against a stripped-down configuration
 nobody runs. Even against the VM process alone, `darwin-runtimed` is
 roughly 12x smaller; against the full running app, roughly 160x.
 
+**A fairer isolation of "VM tax" alone**, since the 35 MB Docker number
+above isn't something a real Docker Desktop user can actually run without
+its mandatory GUI: three tools that *are* headless-by-design were
+measured too, each started fresh, measured alone, and fully stopped
+before the next one started (`benchmarks/vm_runtime_comparison.sh`):
+
+| | Idle footprint | `docker run` cold spawn | Notes |
+|---|---|---|---|
+| `darwin-runtimed` (this project) | **~2.9 MB** | — | no VM, no container runtime |
+| Lima (bare VM, default template, no container runtime) | 2.5 GB | n/a | not a container tool — isolates raw "general-purpose Ubuntu VM" cost |
+| Colima (Docker via Lima, no GUI) | ~960 MB | 130.6 ms | |
+| OrbStack | ~129 MB* | 184.4 ms | |
+| Docker Desktop (VM process only) | ~35 MB | 328.2 ms (full app running) | not runnable standalone — see above |
+| Docker Desktop (full app) | ~464 MB | 328.2 ms | |
+
+\* excludes one small root-owned helper process `footprint` couldn't
+read without `sudo`; based on its RSS it adds roughly 10 MB.
+
+The genuinely surprising result here: **"VM-based" doesn't mean one
+fixed cost.** Lima's default general-purpose Ubuntu VM (2.5 GB) is
+heavier than Docker Desktop's entire GUI-plus-VM product (464 MB),
+because Docker invested in a purpose-built minimal Linux kernel for
+exactly this job, while Lima's default template is a full cloud image
+running systemd, journald, and other general-purpose services most of
+which a container host doesn't need. Colima inherits a lighter Lima
+config but is still heavier than Docker Desktop's *entire* footprint.
+OrbStack, which is built specifically to be lean, comes closest to
+Docker's VM-only number but still isn't smaller than it. None of the
+four VM-based options get near `darwin-runtimed`'s ~2.9 MB, because it
+isn't running a Linux kernel at all — every backend here still pays for
+booting an operating system inside a VM, which is the actual structural
+cost this project avoids, not an implementation detail specific to
+Docker Desktop.
+
 **Cold-spawn latency** (`hyperfine`, 30-75 runs after warmup, a true
 no-op binary so the number reflects spawn overhead only, not job work):
 
