@@ -636,3 +636,46 @@ way an actual person would eventually use it, and comparing the result
 against a number I can independently predict and check by hand, catches
 real mistakes that a narrower, more convenient test can still miss
 completely.
+
+---
+
+## 16. Stopping a job did not actually stop it (Benchmarking)
+
+**What broke.** While running a real heavy-load benchmark, I gave a job
+a workload tool that spins up its own internal worker processes rather
+than doing all its work in the one process I directly started. The
+daemon reported the job as finished, `darwin-run stop` even told me it
+had "already finished," and yet a process from that same job was still
+sitting there afterward, using most of a CPU core, for well over a
+minute after I had every reason to believe it was gone.
+
+**What caused it.** `ProcessSupervisor` was only ever watching the one
+process it directly spawned. That was a completely reasonable design
+for every job I had tested before this point, since a compiled binary
+running its own work is exactly one process from start to finish. The
+workload tool I used for this benchmark does something different: its
+main process sets things up, forks off a separate worker process to
+actually do the heavy work, and can then exit on its own once that
+handoff is done. The daemon saw its one tracked process exit and
+correctly, honestly reported the job as finished. It had no way to know
+a second, untracked process from that same job was still running,
+because nothing had ever told it to look for one.
+
+**How I fixed it, for now.** I did not fix this in the code. I found it
+live, mid-benchmark, and worked around it by hand: finding the orphaned
+process myself with `pgrep` and killing it directly, then double
+checking with `ps` that nothing job-related was left running before
+continuing. A real fix would mean tracking a job by its whole process
+group, not just the one PID it started with, so `stop` reaches every
+descendant a job created, not only the first one.
+
+**What to remember.** Every job this project had run before this point
+happened to be exactly one process, so "the process I spawned is the
+job" was never wrong until I gave it something that didn't fit that
+shape. A design decision that has held up perfectly through every test
+so far can still be quietly built on an assumption nothing has actually
+tested, and the assumption only shows up once something arrives that
+breaks it. I am leaving this documented as a known, real limitation
+rather than pretending it does not exist, since the honest thing here is
+to say plainly what this project's job supervision does and does not
+cover today.

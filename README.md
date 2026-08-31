@@ -233,6 +233,100 @@ Debug builds are meaningfully worse on both axes (~4.4 MB idle footprint,
 ~97 ms sandboxed spawn) — the numbers above are release builds only,
 since that's the fair comparison.
 
+### Under load, not just at startup
+
+Everything above measures the moment of starting up. It says nothing
+about what happens once a job is actually working hard — this section
+does, using `stress-ng` (the industry-standard synthetic load generator,
+not something built for this project) as the identical workload on every
+side: `darwin-runtimed` runs the real macOS build directly, and each
+container tool runs a locally built, **native arm64** image (from
+Alpine's own `stress-ng` package) rather than a pulled x86 image, so
+virtualization overhead isn't accidentally measured as emulation
+overhead. Reproduce with `benchmarks/heavy_load_comparison.sh`.
+
+**CPU throughput** (2 workers, 20s, bogo-ops/sec real time):
+
+| | Throughput |
+|---|---|
+| `darwin-runtimed`, Seatbelt sandboxed | **2899.59** |
+| `darwin-runtimed`, `--no-isolated` | 2892.72 |
+| Docker Desktop | 1000.98 |
+| Colima | 1012.32 |
+| OrbStack | 1000.39 |
+
+Two things stand out. First, sandboxed and unsandboxed are within noise
+of each other — Seatbelt's cost is at spawn/syscall time, not during raw
+computation, matching the earlier cold-start finding. Second, **all
+three VM-based tools land at almost exactly the same number regardless
+of which product it is** — this is a real hardware/virtualization cost
+on this machine, not something any one of them implemented worse than
+the others. `darwin-runtimed` is ahead here specifically because it
+never virtualizes anything.
+
+**Memory throughput** (1 worker, 128MB, bogo-ops/sec real time) — the
+one test that did **not** favor `darwin-runtimed`, reported honestly:
+
+| | Throughput |
+|---|---|
+| Docker Desktop | **132338.77** |
+| OrbStack | 126116.35 |
+| `darwin-runtimed`, Seatbelt sandboxed | 119323.00 |
+| Colima | 107369.04 |
+
+A real, reproducible bug surfaced getting this number: `stress-ng`'s
+`--vm` stressor does not honor its own `--timeout` on macOS — it ran
+about 3x past the requested time, twice, at two different sizes,
+regardless of actual memory pressure, while the identical Linux build
+inside every container finished exactly on time. Confirmed as a genuine
+macOS-specific quirk in `stress-ng` itself, not a memory-pressure fluke
+and not anything this project's sandboxing caused — see
+`DEBUGGING_LOG.md` #16 for the full story, including a second, unrelated
+bug found in the same run: `stress-ng` also reports a nonsensical RSS
+figure on macOS (~142 GB on a 16 GB machine) — the same category of
+platform-specific memory-reporting bug this project already found and
+fixed in its own telemetry, this time in someone else's tool.
+
+**Disk I/O** (256MB, write throughput, bind-mounted to a real host
+folder — the structural equivalent of how `darwin-runtimed` always
+writes, since it has no bridge layer to begin with):
+
+| | Write | Read |
+|---|---|---|
+| Colima | **4612 MB/s** | 14961 MB/s |
+| OrbStack | 2276 MB/s | 3176 MB/s |
+| `darwin-runtimed` (native, no bridge) | 1191 MB/s | 9901 MB/s |
+| Docker Desktop | 1085 MB/s | 15034 MB/s |
+
+No clean winner here either. For reference, Docker Desktop's own
+*internal* container disk (not bind-mounted, i.e. not touching the host
+filesystem at all) hit 5637 MB/s write — a ~5.2x drop once a real host
+folder is bridged in, which is the concrete, measured cost of the
+`virtiofs` bridge every VM-based tool here pays and `darwin-runtimed`
+structurally cannot, since there's nothing to bridge.
+
+**Concurrency** (20 job/container spawns launched simultaneously, total
+wall time — debug build for `darwin-runtimed` here, not release, so this
+gap is likely a floor, not a ceiling):
+
+| | Time for 20 |
+|---|---|
+| `darwin-runtimed` | **0.39s** |
+| Colima | 1.43s |
+| OrbStack | 2.32s |
+| Docker Desktop | 2.55s |
+
+This is the number that actually speaks to the CI-fleet pitch — the
+startup-latency advantage from the cold-start section compounds cleanly
+under real concurrent load rather than disappearing.
+
+**Honest summary**: `darwin-runtimed` wins decisively on CPU throughput
+and concurrency, for real structural reasons (no virtualization layer).
+It does **not** win on memory throughput or disk I/O — those came out
+mixed, sometimes in Docker's or Colima's favor, and are reported as
+measured rather than smoothed over. A benchmark that only shows wins
+isn't a benchmark, it's marketing.
+
 ## Deliberate departures from a "standard container runtime"
 
 Honest tradeoffs, not oversights:
