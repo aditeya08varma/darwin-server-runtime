@@ -13,6 +13,9 @@ cold-start latency. This project builds isolation directly on Darwin's
 own primitives instead — `posix_spawn`, the `sandbox-exec` Seatbelt
 mechanism, `launchd`, and Mach kernel telemetry — no VM involved.
 
+**New here?** [USAGE.md](USAGE.md) is a clean, step-by-step guide to
+actually running this. Everything below is project design and status.
+
 ## Quick example
 
 ```bash
@@ -150,6 +153,52 @@ extraction — see `DEBUGGING_LOG.md` #10 and #11).
   streamed multiple real OTLP batches to a local collector over several
   seconds, with real, correct, independently-verifiable memory numbers.
 
+## Benchmarks
+
+Measured, not asserted — run yourself with `benchmarks/cold_start.sh` and
+`benchmarks/memory_footprint.sh`. Numbers below are from one real run on
+an Apple M1 Pro, macOS 26.5.2, release builds (`swift build -c release`),
+against Docker Desktop 27.5.1, taken back to back on the same machine in
+the same sitting.
+
+**Idle memory footprint** (`phys_footprint`, via macOS's own `footprint`
+tool — the same metric `MachMetricsSampler` uses for job telemetry, not
+the misleading `resident_size`/RSS numbers; see `DEBUGGING_LOG.md` #15):
+
+| | Footprint |
+|---|---|
+| `darwin-runtimed`, idle, no jobs running | **~2.9 MB** |
+| Docker Desktop, idle, no containers running (GUI app + helpers + the actual Linux VM host process, summed) | **~464 MB** |
+| — of which just the Linux VM host process (`com.docker.virtualization`) | ~35 MB |
+
+The ~464 MB is mostly Docker Desktop's Electron-based GUI (dashboard,
+renderer, GPU helper) rather than the VM itself — but that GUI is what
+actually runs on a real developer's machine using Docker Desktop, so it's
+counted rather than benchmarking against a stripped-down configuration
+nobody runs. Even against the VM process alone, `darwin-runtimed` is
+roughly 12x smaller; against the full running app, roughly 160x.
+
+**Cold-spawn latency** (`hyperfine`, 30-75 runs after warmup, a true
+no-op binary so the number reflects spawn overhead only, not job work):
+
+| | Mean | Range |
+|---|---|---|
+| `darwin-run exec`, Seatbelt sandboxed | **55.4 ms** ± 26.1 ms | 23.7 – 109.5 ms |
+| `darwin-run exec`, `--no-isolated` | 47.0 ms ± 24.7 ms | 23.9 – 107.8 ms |
+| `docker run -d --rm alpine true` (image already pulled, daemon already running) | 328.2 ms ± 62.5 ms | 273.3 – 517.0 ms |
+
+Seatbelt sandboxing itself costs roughly 8 ms (~18%) over the unsandboxed
+path — a real, measured tax for real kernel-enforced isolation, not
+nothing. Both are still ~6x faster to spawn than `docker run`, and that
+Docker number assumes the daemon is *already running* — it does not
+include the one-time VM boot this test measured separately at ~12
+seconds from `open -a Docker` to the daemon responding, a cost
+`darwin-runtimed` doesn't have at all since there's no VM to boot.
+
+Debug builds are meaningfully worse on both axes (~4.4 MB idle footprint,
+~97 ms sandboxed spawn) — the numbers above are release builds only,
+since that's the fair comparison.
+
 ## Deliberate departures from a "standard container runtime"
 
 Honest tradeoffs, not oversights:
@@ -175,5 +224,6 @@ Honest tradeoffs, not oversights:
   enforcement would need active Mach-based monitoring — Stage 4
   territory. See `DEBUGGING_LOG.md` #9.
 - **Performance numbers are measured, not asserted.** Cold-start latency
-  and memory overhead live as reproducible scripts in `benchmarks/`,
-  reported here only once actually measured.
+  and memory overhead live as reproducible scripts in `benchmarks/` — see
+  the Benchmarks section above for real numbers from an actual run
+  against a real running Docker Desktop, not estimates.
